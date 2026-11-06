@@ -54,6 +54,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 }
 
 STATE_LOCK = threading.Lock()
+PUSH_LOCK = threading.Lock()
 LAST_SYNC_STATUS: Dict[str, Any] = {
     "last_push_time": None,
     "last_result": None,
@@ -105,36 +106,37 @@ def resolve_weather_for_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_and_push_now(cfg: Dict[str, Any], as_gif: bool = False) -> Dict[str, Any]:
-    weather = resolve_weather_for_config(cfg)
-    custom_bytes = get_custom_media_bytes(cfg)
-    now = datetime.now()
-    smalltv_gif = render_smalltv_80x80_gif(cfg, custom_image_bytes=custom_bytes)
-    theme_key = cfg.get("theme", "pink")
-    if as_gif:
-        payload = render_clock_gif(cfg, weather, now=now, custom_image_bytes=custom_bytes)
-        res = push_to_geekmagic(
-            cfg.get("device_ip", ""),
-            payload,
-            is_gif=True,
-            filename="chiikawa.gif",
-            smalltv_gif_bytes=smalltv_gif,
-            theme_key=theme_key,
-        )
-    else:
-        payload = render_clock_jpeg(cfg, weather, now=now, custom_image_bytes=custom_bytes)
-        res = push_to_geekmagic(
-            cfg.get("device_ip", ""),
-            payload,
-            is_gif=False,
-            filename="chiikawa.jpg",
-            smalltv_gif_bytes=smalltv_gif,
-            theme_key=theme_key,
-        )
+    with PUSH_LOCK:
+        weather = resolve_weather_for_config(cfg)
+        custom_bytes = get_custom_media_bytes(cfg)
+        now = datetime.now()
+        smalltv_gif = render_smalltv_80x80_gif(cfg, custom_image_bytes=custom_bytes)
+        theme_key = cfg.get("theme", "pink")
+        if as_gif:
+            payload = render_clock_gif(cfg, weather, now=now, custom_image_bytes=custom_bytes)
+            res = push_to_geekmagic(
+                cfg.get("device_ip", ""),
+                payload,
+                is_gif=True,
+                filename="chiikawa.gif",
+                smalltv_gif_bytes=smalltv_gif,
+                theme_key=theme_key,
+            )
+        else:
+            payload = render_clock_jpeg(cfg, weather, now=now, custom_image_bytes=custom_bytes)
+            res = push_to_geekmagic(
+                cfg.get("device_ip", ""),
+                payload,
+                is_gif=False,
+                filename="chiikawa.jpg",
+                smalltv_gif_bytes=smalltv_gif,
+                theme_key=theme_key,
+            )
 
-    with STATE_LOCK:
-        LAST_SYNC_STATUS["last_push_time"] = now.strftime("%H:%M:%S")
-        LAST_SYNC_STATUS["last_result"] = res
-    return res
+        with STATE_LOCK:
+            LAST_SYNC_STATUS["last_push_time"] = now.strftime("%H:%M:%S")
+            LAST_SYNC_STATUS["last_result"] = res
+        return res
 
 
 def auto_sync_worker() -> None:
@@ -787,10 +789,6 @@ async function scanDevices() {
 
 async function pushToClock(asGif) {
   readFormIntoState();
-  if (!currentState.device_ip) {
-    setStatus("⚠️ 먼저 상단의 [1. 긱매직 시계 Wi-Fi 연결] 칸에 시계의 IP 주소를 입력하거나 [기기 IP 자동 찾기]를 눌러주세요!", "err");
-    return;
-  }
   setStatus(asGif ? "🎞️ 움직이는 치이카와 GIF를 생성하여 시계로 전송 중..." : "🚀 치이카와 화면을 시계로 전송하고 있습니다...", "info");
   try {
     const resp = await fetch("/api/push", {
@@ -799,6 +797,10 @@ async function pushToClock(asGif) {
       body: JSON.stringify({config: currentState, as_gif: asGif})
     });
     const res = await resp.json();
+    if (res.ip && !document.getElementById("deviceIp").value.trim()) {
+      document.getElementById("deviceIp").value = res.ip;
+      currentState.device_ip = res.ip;
+    }
     if (res.ok) {
       setStatus(`🎉 시계(${res.ip})로 전송 완료! (${(res.bytes/1024).toFixed(1)} KB · ${res.filename})`, "ok");
     } else {
@@ -915,7 +917,10 @@ class StudioRequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/config":
             cfg = load_config()
+            saved_ip = cfg.get("device_ip", "")
             cfg.update(payload)
+            if not cfg.get("device_ip") and saved_ip:
+                cfg["device_ip"] = saved_ip
             save_config(cfg)
             self._send_json({"ok": True, "config": cfg})
             return
@@ -941,8 +946,11 @@ class StudioRequestHandler(BaseHTTPRequestHandler):
             new_cfg = payload.get("config")
             as_gif = bool(payload.get("as_gif", True))
             cfg = load_config()
+            saved_ip = cfg.get("device_ip", "")
             if isinstance(new_cfg, dict):
                 cfg.update(new_cfg)
+            if not cfg.get("device_ip") and saved_ip:
+                cfg["device_ip"] = saved_ip
             cfg["as_gif"] = as_gif
             save_config(cfg)
             res = build_and_push_now(cfg, as_gif=as_gif)

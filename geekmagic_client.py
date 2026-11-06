@@ -318,8 +318,9 @@ def push_to_geekmagic(
     if not ip:
         return {"ok": False, "error": "기기 IP 주소를 입력해주세요."}
 
-    # Check if this device is Classic SmallTV (has /city.json or /upload.html)
-    dev_info = probe_geekmagic_ip(ip, timeout=1.5)
+    # Check if this device is Classic SmallTV (only when smalltv_gif_bytes is provided and /doUpload is unknown)
+    # Increase timeout to 3.5s so an active GIF playback frame never causes a false timeout
+    dev_info = probe_geekmagic_ip(ip, timeout=3.5)
     is_classic_smalltv = bool(dev_info and dev_info.get("variant") == "smalltv_classic")
 
     if is_classic_smalltv and smalltv_gif_bytes is not None:
@@ -359,6 +360,16 @@ def push_to_geekmagic(
 
     if not filename:
         filename = "chiikawa.gif" if is_gif else "chiikawa.jpg"
+
+    # IMPORTANT for SmallTV-Ultra (ESP8266):
+    # Playing a full-screen 240x240 GIF holds the file open in LittleFS and uses ~85% CPU.
+    # Pausing GIF playback (by switching to static JPG or deleting target file first) makes /doUpload 10x faster and prevents timeouts!
+    try:
+        if is_gif:
+            urllib.request.urlopen(f"http://{ip}/set?img=/image/chiikawa.jpg", timeout=3.0).read()
+        urllib.request.urlopen(f"http://{ip}/delete?file=/image/{urllib.parse.quote(filename)}", timeout=3.0).read()
+    except Exception:
+        pass
 
     content_type = "image/gif" if is_gif else "image/jpeg"
     body, header_ct = _build_multipart("file", filename, file_bytes, content_type)

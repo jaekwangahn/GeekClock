@@ -953,11 +953,11 @@ def render_clock_gif(
 
     if not frames:
         # Built-in 4-frame lively animation (bounce, wave paws, step-dance, blink, sparkle)
-        # 64-color palette keeps 240x240 GIF compact (~40KB) for fast ESP8266 upload & smooth playback
+        # 420ms frame delay + 64-color palette gives smooth animation while leaving ESP8266 CPU headroom for HTTP
         for idx in range(4):
             composed = _compose_single_frame(config, weather, now, frame_idx=idx, custom_frame=None)
             frames.append(composed.quantize(colors=64, method=Image.Quantize.MEDIANCUT))
-            durations.append(240)
+            durations.append(420)
 
     buf = io.BytesIO()
     frames[0].save(
