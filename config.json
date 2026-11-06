@@ -1,0 +1,19 @@
+{
+  "device_ip": "172.16.1.104",
+  "character": "trio",
+  "mood": "happy",
+  "theme": "butter",
+  "layout": "character_focus",
+  "city_key": "seoul",
+  "city_label": "",
+  "use_manual_weather": false,
+  "manual_temp": 18,
+  "manual_code": "sunny",
+  "use_12h": false,
+  "custom_text": "야하~! 신나는 하루!",
+  "dday_title": "",
+  "dday_date": "",
+  "auto_sync": true,
+  "as_gif": true,
+  "custom_media_filename": ""
+}
