@@ -1,8 +1,8 @@
 {
   "device_ip": "172.16.1.104",
-  "character": "trio",
+  "character": "chiikawa",
   "mood": "happy",
-  "theme": "butter",
+  "theme": "night",
   "layout": "character_focus",
   "city_key": "seoul",
   "city_label": "",
@@ -10,10 +10,11 @@
   "manual_temp": 18,
   "manual_code": "sunny",
   "use_12h": false,
-  "custom_text": "야하~! 신나는 하루!",
+  "custom_text": "토벌 성공! 맛있는 거 먹자~",
   "dday_title": "",
   "dday_date": "",
   "auto_sync": true,
   "as_gif": true,
+  "brightness": 5,
   "custom_media_filename": ""
 }

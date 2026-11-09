@@ -24,13 +24,25 @@ from geekmagic_client import (
     control_device,
     discover_geekmagic_devices,
     fetch_weather,
+    get_device_brightness,
     probe_geekmagic_ip,
     push_to_geekmagic,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-CUSTOM_MEDIA_DIR = os.path.join(BASE_DIR, "custom_media")
+DATA_DIR = os.environ.get("GEEKCLOCK_DATA_DIR") or BASE_DIR
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    test_file = os.path.join(DATA_DIR, ".write_test")
+    with open(test_file, "w") as _tf:
+        _tf.write("ok")
+    os.remove(test_file)
+except Exception:
+    DATA_DIR = os.path.expanduser("~/Library/Application Support/GeekClock")
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
+CUSTOM_MEDIA_DIR = os.path.join(DATA_DIR, "custom_media")
 os.makedirs(CUSTOM_MEDIA_DIR, exist_ok=True)
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -50,6 +62,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "dday_date": "",
     "auto_sync": True,
     "as_gif": True,
+    "brightness": 80,
     "custom_media_filename": "",
 }
 
@@ -452,8 +465,13 @@ STUDIO_HTML = r"""<!DOCTYPE html>
     </div>
     <span class="badge-pill">240x240 IPS 전용</span>
   </div>
-  <div id="syncBadge" class="badge-pill" style="background:#f3f9ff;color:#3b82f6;border-color:#bfdbfe;">
-    실시간 미리보기 준비 완료
+  <div style="display:flex; align-items:center; gap:8px;">
+    <div id="syncBadge" class="badge-pill" style="background:#f3f9ff;color:#3b82f6;border-color:#bfdbfe;">
+      실시간 미리보기 준비 완료
+    </div>
+    <button class="chip-btn" style="padding:5px 10px; font-size:12px; color:#c93535; border-color:#f5c2c7;" onclick="shutdownServer()">
+      🛑 서버 종료
+    </button>
   </div>
 </header>
 
@@ -499,17 +517,41 @@ STUDIO_HTML = r"""<!DOCTYPE html>
   <!-- Right Column: Customization Controls -->
   <div class="panel">
 
-    <!-- 1. Device IP & Discovery -->
+    <!-- 1. Device IP & Brightness -->
     <div class="section-box">
-      <div class="section-title">📡 1. 긱매직 시계 Wi-Fi 연결 (IP 주소)</div>
+      <div class="section-title">📡 1. 긱매직 시계 연결 & 화면 밝기 조절</div>
       <div class="row">
-        <input type="text" id="deviceIp" placeholder="예: 172.16.1.115 또는 192.168.0.25" onchange="onControlChange()">
+        <input type="text" id="deviceIp" placeholder="예: 172.16.1.104 또는 192.168.0.25" onchange="onControlChange()">
         <button class="btn btn-secondary" style="width:auto; white-space:nowrap;" onclick="scanDevices()">
           🔍 기기 IP 자동 찾기
         </button>
       </div>
+
+      <!-- Brightness Slider & Presets -->
+      <div style="background:#fff7fa; border:2px solid #f7d6e3; border-radius:16px; padding:14px 16px; margin-top:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <span style="font-size:13px; font-weight:800;">🔆 시계 화면 밝기</span>
+          <span id="brtLabel" style="font-size:14px; font-weight:800; color:var(--pink);">80%</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-size:12px; color:var(--sub);">어둡게</span>
+          <input type="range" id="brtSlider" min="0" max="100" step="5" value="80"
+                 style="flex:1; accent-color:var(--pink); cursor:pointer;"
+                 oninput="document.getElementById('brtLabel').innerText = this.value + '%'"
+                 onchange="setClockBrightness(this.value)">
+          <span style="font-size:12px; color:var(--sub);">밝게</span>
+        </div>
+        <div style="display:flex; gap:6px; margin-top:10px; flex-wrap:wrap;">
+          <button class="chip-btn" style="flex:1; padding:7px 8px; font-size:12px;" onclick="setClockBrightness(5)">🌙 최소(5%)</button>
+          <button class="chip-btn" style="flex:1; padding:7px 8px; font-size:12px;" onclick="setClockBrightness(25)">🔉 은은(25%)</button>
+          <button class="chip-btn" style="flex:1; padding:7px 8px; font-size:12px;" onclick="setClockBrightness(55)">🌤️ 보통(55%)</button>
+          <button class="chip-btn" style="flex:1; padding:7px 8px; font-size:12px;" onclick="setClockBrightness(80)">☀️ 밝음(80%)</button>
+          <button class="chip-btn" style="flex:1; padding:7px 8px; font-size:12px;" onclick="setClockBrightness(100)">🔆 최대(100%)</button>
+        </div>
+      </div>
+
       <div class="help-tip">
-        💡 <b>팁:</b> 시계 전원을 켰을 때 부팅 화면 하단이나 날씨 화면 전환 시 IP 주소가 표시됩니다. 같은 공유기(Wi-Fi)에 연결되어 있다면 <b>[기기 IP 자동 찾기]</b>를 눌러보세요!
+        💡 <b>팁:</b> 슬라이더를 움직이거나 밝기 버튼을 누르면 <b>시계 화면 밝기가 즉시 변경</b>됩니다.
       </div>
     </div>
 
@@ -811,6 +853,38 @@ async function pushToClock(asGif) {
   }
 }
 
+async function setClockBrightness(val) {
+  const brt = parseInt(val, 10);
+  document.getElementById("brtSlider").value = brt;
+  document.getElementById("brtLabel").innerText = brt + "%";
+  currentState.brightness = brt;
+  readFormIntoState();
+  setStatus(`🔆 시계 화면 밝기를 ${brt}%로 조절 중...`, "info");
+  try {
+    const resp = await fetch("/api/brightness", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({device_ip: currentState.device_ip, brightness: brt})
+    });
+    const res = await resp.json();
+    if (res.ok) {
+      setStatus(`✅ 시계(${res.ip}) 화면 밝기가 <b>${brt}%</b>로 변경되었습니다!`, "ok");
+    } else {
+      setStatus(`❌ 밝기 변경 실패: ${res.error}`, "err");
+    }
+  } catch (e) {
+    setStatus("❌ 밝기 변경 요청 오류: " + e, "err");
+  }
+}
+
+async function shutdownServer() {
+  if (!confirm("치이카와 시계 스튜디오 백그라운드 서버를 종료하시겠습니까?")) return;
+  try {
+    await fetch("/api/shutdown", {method: "POST"});
+  } catch (e) {}
+  document.body.innerHTML = "<div style='display:flex;height:100vh;align-items:center;justify-content:center;font-family:sans-serif;flex-direction:column;gap:12px;'><h2>👋 치이카와 시계 스튜디오가 종료되었습니다.</h2><p style='color:#666;'>이 브라우저 탭을 닫으셔도 됩니다.</p></div>";
+}
+
 async function initStudio() {
   const resp = await fetch("/api/config");
   const cfg = await resp.json();
@@ -826,6 +900,9 @@ async function initStudio() {
   document.getElementById("ddayTitle").value = currentState.dday_title ?? "";
   document.getElementById("ddayDate").value = currentState.dday_date ?? "";
   document.getElementById("autoSyncToggle").checked = !!currentState.auto_sync;
+  const brt = currentState.brightness ?? 80;
+  document.getElementById("brtSlider").value = brt;
+  document.getElementById("brtLabel").innerText = brt + "%";
   updateChipUI();
 }
 
@@ -868,6 +945,10 @@ class StudioRequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/config":
             cfg = load_config()
+            if cfg.get("device_ip"):
+                live_brt = get_device_brightness(cfg["device_ip"])
+                if live_brt is not None:
+                    cfg["brightness"] = live_brt
             self._send_json(cfg)
             return
 
@@ -940,6 +1021,23 @@ class StudioRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "filename": filename})
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, status=400)
+            return
+
+        if path == "/api/shutdown":
+            self._send_json({"ok": True})
+            threading.Timer(0.3, lambda: os._exit(0)).start()
+            return
+
+        if path == "/api/brightness":
+            cfg = load_config()
+            ip = (payload.get("device_ip") or cfg.get("device_ip") or "").strip()
+            brt = int(payload.get("brightness", 80))
+            cfg["brightness"] = brt
+            if ip:
+                cfg["device_ip"] = ip
+            save_config(cfg)
+            res = control_device(ip, brightness=brt)
+            self._send_json(res)
             return
 
         if path == "/api/push":

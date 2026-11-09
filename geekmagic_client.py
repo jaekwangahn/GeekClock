@@ -462,17 +462,50 @@ def push_to_geekmagic(
     }
 
 
-def control_device(device_ip: str, theme: Optional[int] = None, brightness: Optional[int] = None) -> Dict[str, Any]:
-    """Changes theme or screen brightness on the GeekMagic device."""
+def control_device(
+    device_ip: str,
+    theme: Optional[int] = None,
+    brightness: Optional[int] = None,
+    night_mode: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Changes theme, screen brightness (0~100), or night mode schedule on the GeekMagic device."""
     ip = device_ip.strip().replace("http://", "").replace("https://", "").split("/")[0]
-    results = {}
+    if not ip:
+        return {"ok": False, "error": "기기 IP 주소가 없습니다."}
+    results: Dict[str, Any] = {}
     try:
         if theme is not None:
-            with urllib.request.urlopen(f"http://{ip}/set?theme={int(theme)}", timeout=3.0) as r:
+            with urllib.request.urlopen(f"http://{ip}/set?theme={int(theme)}", timeout=4.0) as r:
                 results["theme"] = r.status
         if brightness is not None:
-            with urllib.request.urlopen(f"http://{ip}/set?brt={int(brightness)}", timeout=3.0) as r:
-                results["brightness"] = r.status
-        return {"ok": True, "results": results}
+            brt_val = max(0, min(250, int(brightness)))
+            with urllib.request.urlopen(f"http://{ip}/set?brt={brt_val}", timeout=4.0) as r:
+                results["brightness"] = brt_val
+                results["status"] = r.status
+        if night_mode is not None:
+            t1 = int(night_mode.get("start_hour", 22))
+            t2 = int(night_mode.get("end_hour", 7))
+            b1 = max(0, min(250, int(night_mode.get("day_brt", brightness or 80))))
+            b2 = max(0, min(250, int(night_mode.get("night_brt", 5))))
+            en = 1 if night_mode.get("enabled") else 0
+            url = f"http://{ip}/set?t1={t1}&t2={t2}&b1={b1}&b2={b2}&en={en}"
+            with urllib.request.urlopen(url, timeout=4.0) as r:
+                results["night_mode"] = r.status
+        return {"ok": True, "ip": ip, "results": results}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+def get_device_brightness(device_ip: str) -> Optional[int]:
+    """Reads current brightness from /brt.json on the GeekMagic device if available."""
+    ip = device_ip.strip().replace("http://", "").replace("https://", "").split("/")[0]
+    if not ip:
+        return None
+    try:
+        with urllib.request.urlopen(f"http://{ip}/brt.json", timeout=2.5) as r:
+            data = json.loads(_read_http_text(r, 1024))
+            if "brt" in data:
+                return int(data["brt"])
+    except Exception:
+        pass
+    return None
