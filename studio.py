@@ -14,7 +14,7 @@ import threading
 import time
 import urllib.parse
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional
 
@@ -25,8 +25,12 @@ from geekmagic_client import (
     discover_geekmagic_devices,
     fetch_weather,
     get_device_brightness,
+    get_ntp_now,
+    get_ntp_status,
     probe_geekmagic_ip,
     push_to_geekmagic,
+    set_device_ntp,
+    sync_ntp_offset,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -63,6 +67,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "auto_sync": True,
     "as_gif": True,
     "brightness": 80,
+    "ntp_server": "time.google.com",
     "custom_media_filename": "",
 }
 
@@ -118,12 +123,18 @@ def resolve_weather_for_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return fetch_weather(city_key=cfg.get("city_key", "seoul"))
 
 
-def build_and_push_now(cfg: Dict[str, Any], as_gif: bool = False) -> Dict[str, Any]:
+def build_and_push_now(
+    cfg: Dict[str, Any],
+    as_gif: bool = False,
+    target_now: Optional[datetime] = None,
+) -> Dict[str, Any]:
     with PUSH_LOCK:
+        ntp_srv = cfg.get("ntp_server", "time.google.com")
         weather = resolve_weather_for_config(cfg)
         custom_bytes = get_custom_media_bytes(cfg)
-        now = datetime.now()
-        smalltv_gif = render_smalltv_80x80_gif(cfg, custom_image_bytes=custom_bytes)
+        # Use NTP-synchronized standard time + upload transfer lead compensation (~4s for GIF, ~1s for JPG)
+        now = target_now or (get_ntp_now(ntp_srv) + timedelta(seconds=4 if as_gif else 1))
+        smalltv_gif = render_smalltv_80x80_gif(cfg, custom_image_bytes=custom_bytes, now=now)
         theme_key = cfg.get("theme", "pink")
         if as_gif:
             payload = render_clock_gif(cfg, weather, now=now, custom_image_bytes=custom_bytes)
@@ -147,31 +158,50 @@ def build_and_push_now(cfg: Dict[str, Any], as_gif: bool = False) -> Dict[str, A
             )
 
         with STATE_LOCK:
-            LAST_SYNC_STATUS["last_push_time"] = now.strftime("%H:%M:%S")
+            LAST_SYNC_STATUS["last_push_time"] = get_ntp_now(ntp_srv).strftime("%H:%M:%S")
             LAST_SYNC_STATUS["last_result"] = res
         return res
 
 
 def auto_sync_worker() -> None:
-    """Background thread that pushes updated time & temperature when auto_sync is enabled."""
+    """
+    Background thread that pushes updated NTP-synced time & temperature EVERY MINUTE.
+    Starts the upload ~4 seconds before the NTP minute rollover (for GIF) so the clock screen
+    flips to the new minute right at :00 seconds of NTP time, retrying automatically on error.
+    """
     last_pushed_slot = ""
+    consecutive_failures = 0
     while True:
         try:
             cfg = load_config()
             if cfg.get("auto_sync") and cfg.get("device_ip", "").strip():
                 as_gif = bool(cfg.get("as_gif", True))
-                now = datetime.now()
-                # For GIF mode, sync every 3 minutes so animation loops smoothly without frequent flash writes
-                slot_min = (now.minute // 3) * 3 if as_gif else now.minute
-                now_slot = f"{now.strftime('%Y-%m-%d %H')}:{slot_min:02d}:{as_gif}"
+                ntp_srv = cfg.get("ntp_server", "time.google.com")
+                lead_sec = 4 if as_gif else 1
+                target_dt = get_ntp_now(ntp_srv) + timedelta(seconds=lead_sec)
+                now_slot = f"{target_dt.strftime('%Y-%m-%d %H:%M')}:{as_gif}"
                 if now_slot != last_pushed_slot:
-                    build_and_push_now(cfg, as_gif=as_gif)
-                    last_pushed_slot = now_slot
+                    res = build_and_push_now(cfg, as_gif=as_gif, target_now=target_dt)
+                    if res.get("ok"):
+                        last_pushed_slot = now_slot
+                        consecutive_failures = 0
+                    else:
+                        consecutive_failures += 1
+                        # If unreachable 3 times in a row, scan local subnet in case DHCP IP changed
+                        if consecutive_failures >= 3:
+                            disc = discover_geekmagic_devices()
+                            if disc.get("devices"):
+                                new_ip = disc["devices"][0]["ip"]
+                                if new_ip != cfg.get("device_ip"):
+                                    cfg["device_ip"] = new_ip
+                                    save_config(cfg)
+                            consecutive_failures = 0
+                        time.sleep(3.0)
             else:
                 last_pushed_slot = ""
         except Exception:
             pass
-        time.sleep(3.0)
+        time.sleep(1.0)
 
 
 STUDIO_HTML = r"""<!DOCTYPE html>
@@ -635,6 +665,25 @@ STUDIO_HTML = r"""<!DOCTYPE html>
         </div>
       </div>
 
+      <!-- NTP Standard Time Sync Box -->
+      <div style="background:#f3f9ff; border:2px solid #cde3ff; border-radius:14px; padding:12px 14px; margin-top:8px; margin-bottom:8px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <span style="font-size:12px; font-weight:800; color:#1e40af;">🌐 NTP 표준시간 서버 기준 자동 보정</span>
+          <span id="ntpOffsetInfo" style="font-size:11px; font-weight:700; color:#2563eb;">동기화 확인 중...</span>
+        </div>
+        <div class="row" style="margin-bottom:0;">
+          <select id="ntpServer" onchange="onControlChange()" style="flex:1;">
+            <option value="time.google.com">time.google.com (Google 표준시 · 권장)</option>
+            <option value="time.apple.com">time.apple.com (Apple 표준시)</option>
+            <option value="kr.pool.ntp.org">kr.pool.ntp.org (한국 NTP 풀)</option>
+            <option value="time.cloudflare.com">time.cloudflare.com (Cloudflare 표준시)</option>
+          </select>
+          <button class="btn btn-secondary" style="width:auto; white-space:nowrap; padding:9px 12px; font-size:12px;" onclick="syncNtpNow()">
+            🔄 지금 NTP 동기화
+          </button>
+        </div>
+      </div>
+
       <div style="margin-top:8px;">
         <label style="font-size:13px; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:6px;">
           <input type="checkbox" id="useManualWeather" onchange="onControlChange()">
@@ -748,6 +797,7 @@ function readFormIntoState() {
   currentState.layout = document.getElementById("layoutMode").value;
   currentState.city_key = document.getElementById("cityKey").value;
   currentState.use_12h = document.getElementById("use12h").value === "true";
+  currentState.ntp_server = document.getElementById("ntpServer").value;
   currentState.use_manual_weather = document.getElementById("useManualWeather").checked;
   currentState.manual_temp = parseInt(document.getElementById("manualTemp").value || "18", 10);
   currentState.manual_code = document.getElementById("manualCode").value;
@@ -885,6 +935,41 @@ async function shutdownServer() {
   document.body.innerHTML = "<div style='display:flex;height:100vh;align-items:center;justify-content:center;font-family:sans-serif;flex-direction:column;gap:12px;'><h2>👋 치이카와 시계 스튜디오가 종료되었습니다.</h2><p style='color:#666;'>이 브라우저 탭을 닫으셔도 됩니다.</p></div>";
 }
 
+async function refreshNtpStatus() {
+  try {
+    const resp = await fetch("/api/ntp");
+    const st = await resp.json();
+    if (st.synced) {
+      const sign = st.offset_sec >= 0 ? "+" : "";
+      const txt = `🌐 NTP: ${st.server} (${st.current_kst.slice(11)} · 보정 ${sign}${st.offset_sec.toFixed(2)}s)`;
+      document.getElementById("syncBadge").innerText = txt;
+      document.getElementById("ntpOffsetInfo").innerText = `${st.server} 동기화됨 (오차 ${sign}${(st.offset_sec*1000).toFixed(0)}ms)`;
+    }
+  } catch (e) {}
+}
+
+async function syncNtpNow() {
+  readFormIntoState();
+  setStatus(`🌐 ${currentState.ntp_server} 표준시간 서버와 시간을 동기화하고 시계에 반영 중...`, "info");
+  try {
+    const resp = await fetch("/api/ntp", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ntp_server: currentState.ntp_server, device_ip: currentState.device_ip})
+    });
+    const res = await resp.json();
+    await refreshNtpStatus();
+    saveAndRefreshPreview();
+    if (res.synced) {
+      setStatus(`✅ NTP 표준시(${res.server} · ${res.current_kst}) 동기화 및 시계 반영 완료!`, "ok");
+    } else {
+      setStatus("⚠️ NTP 서버 응답 지연으로 시스템 표준시를 사용 중입니다.", "err");
+    }
+  } catch (e) {
+    setStatus("❌ NTP 동기화 오류: " + e, "err");
+  }
+}
+
 async function initStudio() {
   const resp = await fetch("/api/config");
   const cfg = await resp.json();
@@ -893,6 +978,7 @@ async function initStudio() {
   document.getElementById("layoutMode").value = currentState.layout || "character_focus";
   document.getElementById("cityKey").value = currentState.city_key || "seoul";
   document.getElementById("use12h").value = currentState.use_12h ? "true" : "false";
+  document.getElementById("ntpServer").value = currentState.ntp_server || "time.google.com";
   document.getElementById("useManualWeather").checked = !!currentState.use_manual_weather;
   document.getElementById("manualTemp").value = currentState.manual_temp ?? 18;
   document.getElementById("manualCode").value = currentState.manual_code || "sunny";
@@ -904,12 +990,14 @@ async function initStudio() {
   document.getElementById("brtSlider").value = brt;
   document.getElementById("brtLabel").innerText = brt + "%";
   updateChipUI();
+  refreshNtpStatus();
 }
 
 initStudio();
 setInterval(() => {
   const ts = Date.now();
   document.getElementById("previewImg").src = "/api/preview.gif?t=" + ts;
+  refreshNtpStatus();
 }, 30000);
 </script>
 </body>
@@ -952,6 +1040,12 @@ class StudioRequestHandler(BaseHTTPRequestHandler):
             self._send_json(cfg)
             return
 
+        if path == "/api/ntp":
+            cfg = load_config()
+            sync_ntp_offset(preferred_server=cfg.get("ntp_server", "time.google.com"), force=False)
+            self._send_json(get_ntp_status())
+            return
+
         if path == "/api/discover":
             res = discover_geekmagic_devices()
             self._send_json(res)
@@ -961,7 +1055,8 @@ class StudioRequestHandler(BaseHTTPRequestHandler):
             cfg = load_config()
             weather = resolve_weather_for_config(cfg)
             custom_bytes = get_custom_media_bytes(cfg)
-            jpg = render_clock_jpeg(cfg, weather, custom_image_bytes=custom_bytes)
+            ntp_now = get_ntp_now(cfg.get("ntp_server", "time.google.com"))
+            jpg = render_clock_jpeg(cfg, weather, now=ntp_now, custom_image_bytes=custom_bytes)
             self.send_response(200)
             self.send_header("Content-Type", "image/jpeg")
             self.send_header("Content-Length", str(len(jpg)))
@@ -974,7 +1069,8 @@ class StudioRequestHandler(BaseHTTPRequestHandler):
             cfg = load_config()
             weather = resolve_weather_for_config(cfg)
             custom_bytes = get_custom_media_bytes(cfg)
-            gif = render_clock_gif(cfg, weather, custom_image_bytes=custom_bytes)
+            ntp_now = get_ntp_now(cfg.get("ntp_server", "time.google.com"))
+            gif = render_clock_gif(cfg, weather, now=ntp_now, custom_image_bytes=custom_bytes)
             self.send_response(200)
             self.send_header("Content-Type", "image/gif")
             self.send_header("Content-Length", str(len(gif)))
@@ -1026,6 +1122,23 @@ class StudioRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/shutdown":
             self._send_json({"ok": True})
             threading.Timer(0.3, lambda: os._exit(0)).start()
+            return
+
+        if path == "/api/ntp":
+            cfg = load_config()
+            ntp_srv = (payload.get("ntp_server") or cfg.get("ntp_server") or "time.google.com").strip()
+            ip = (payload.get("device_ip") or cfg.get("device_ip") or "").strip()
+            cfg["ntp_server"] = ntp_srv
+            if ip:
+                cfg["device_ip"] = ip
+            save_config(cfg)
+            sync_ntp_offset(preferred_server=ntp_srv, force=True)
+            st = get_ntp_status()
+            if ip:
+                st["device_ntp"] = set_device_ntp(ip, ntp_srv)
+                # Push updated NTP time screen immediately in background
+                threading.Thread(target=build_and_push_now, args=(cfg, bool(cfg.get("as_gif", True))), daemon=True).start()
+            self._send_json(st)
             return
 
         if path == "/api/brightness":
@@ -1094,6 +1207,16 @@ def main() -> None:
                 print(f"[{now_str}] ⚠️ 전송 실패: {res.get('error')}")
             time.sleep(60)
 
+    # Initial NTP sync against time.google.com (or configured server) + update device's internal NTP
+    boot_cfg = load_config()
+    ntp_st = sync_ntp_offset(preferred_server=boot_cfg.get("ntp_server", "time.google.com"), force=True)
+    if boot_cfg.get("device_ip"):
+        threading.Thread(
+            target=set_device_ntp,
+            args=(boot_cfg["device_ip"], boot_cfg.get("ntp_server", "time.google.com")),
+            daemon=True,
+        ).start()
+
     # Start background auto-sync worker thread
     worker = threading.Thread(target=auto_sync_worker, daemon=True)
     worker.start()
@@ -1102,6 +1225,7 @@ def main() -> None:
     server = ThreadingHTTPServer(("127.0.0.1", args.port), StudioRequestHandler)
     print("=" * 62)
     print("  🐹✨ 치이카와 x 긱매직 시계 커스텀 스튜디오가 실행되었습니다!")
+    print(f"  🌐 NTP 표준시 동기화: {ntp_st.get('server')} (오차 {ntp_st.get('offset_sec', 0.0):+.3f}초)")
     print(f"  👉 브라우저 주소: {url}")
     print("  (종료하려면 터미널에서 Ctrl+C 를 누르세요)")
     print("=" * 62)

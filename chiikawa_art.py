@@ -557,14 +557,14 @@ def draw_single_character(
     _draw_character_face_details(draw, cx, cy, mood=mood, frame_idx=frame_idx, scale=scale)
 
 
-def calculate_dday(target_date_str: str) -> Optional[str]:
+def calculate_dday(target_date_str: str, today: Optional[date] = None) -> Optional[str]:
     """Calculates D-Day badge text (e.g. 'D-14', 'D-DAY', 'D+5') from 'YYYY-MM-DD'."""
     if not target_date_str or not target_date_str.strip():
         return None
     try:
         target = datetime.strptime(target_date_str.strip(), "%Y-%m-%d").date()
-        today = date.today()
-        diff = (target - today).days
+        base_date = today or date.today()
+        diff = (target - base_date).days
         if diff == 0:
             return "D-DAY"
         elif diff > 0:
@@ -725,7 +725,7 @@ def _compose_single_frame(
 
     # --- 4. Draw Bottom Speech Bubble / Custom Text & D-Day Badge ---
     custom_text = (config.get("custom_text") or "").strip()
-    dday_str = calculate_dday(config.get("dday_date", ""))
+    dday_str = calculate_dday(config.get("dday_date", ""), today=now.date())
     dday_title = (config.get("dday_title") or "").strip()
 
     if custom_text or dday_str:
@@ -796,6 +796,7 @@ def render_clock_jpeg(
 def render_smalltv_80x80_gif(
     config: Dict[str, Any],
     custom_image_bytes: Optional[bytes] = None,
+    now: Optional[datetime] = None,
 ) -> bytes:
     """
     Renders an 80x80 animated GIF (<700KB) specifically for the GeekMagic SmallTV
@@ -803,6 +804,8 @@ def render_smalltv_80x80_gif(
     Uses a pure #000000 black background by default so the character blends seamlessly
     into the SmallTV's native black clock/temperature screen.
     """
+    if now is None:
+        now = datetime.now()
     target_size = 80
     ss = 240  # 3x supersampling (240x240 -> 80x80) for ultra-clean lines
     character = config.get("character", "chiikawa")
@@ -812,7 +815,7 @@ def render_smalltv_80x80_gif(
     theme = THEMES.get(theme_key, THEMES["pink"])
 
     custom_text = (config.get("custom_text") or "").strip()
-    dday_str = calculate_dday(config.get("dday_date", ""))
+    dday_str = calculate_dday(config.get("dday_date", ""), today=now.date())
     dday_title = (config.get("dday_title") or "").strip()
     if dday_str:
         badge_str = f"{dday_title} {dday_str}".strip()

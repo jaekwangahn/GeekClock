@@ -16,5 +16,6 @@
   "auto_sync": true,
   "as_gif": true,
   "brightness": 5,
+  "ntp_server": "time.google.com",
   "custom_media_filename": ""
 }

@@ -30,4 +30,4 @@ find_python() {
 }
 
 PY="$(find_python)"
-exec "$PY" studio.py
+exec /usr/bin/caffeinate -i "$PY" studio.py

@@ -5,14 +5,17 @@ Works with stock firmware (SmallTV / SmallTV-Pro / SmallTV-Ultra).
 
 from __future__ import annotations
 import concurrent.futures
+import email.utils
 import gzip
 import json
 import re
 import socket
+import struct
 import subprocess
 import time
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 KOREAN_CITIES: Dict[str, Dict[str, Any]] = {
@@ -289,6 +292,9 @@ CLOCK_COLOR_PALETTES: Dict[str, Tuple[str, str, str]] = {
 }
 
 
+_DEVICE_VARIANT_CACHE: Dict[str, str] = {}
+
+
 def set_smalltv_clock_colors(ip: str, theme_key: str = "pink") -> None:
     """Sets Hour, Minute, Second digital clock colors on SmallTV classic firmware."""
     hc, mc, sc = CLOCK_COLOR_PALETTES.get(theme_key, CLOCK_COLOR_PALETTES["pink"])
@@ -318,10 +324,13 @@ def push_to_geekmagic(
     if not ip:
         return {"ok": False, "error": "기기 IP 주소를 입력해주세요."}
 
-    # Check if this device is Classic SmallTV (only when smalltv_gif_bytes is provided and /doUpload is unknown)
-    # Increase timeout to 3.5s so an active GIF playback frame never causes a false timeout
-    dev_info = probe_geekmagic_ip(ip, timeout=3.5)
-    is_classic_smalltv = bool(dev_info and dev_info.get("variant") == "smalltv_classic")
+    variant = _DEVICE_VARIANT_CACHE.get(ip)
+    if not variant:
+        dev_info = probe_geekmagic_ip(ip, timeout=3.5)
+        variant = (dev_info or {}).get("variant", "ultra_pro")
+        if dev_info:
+            _DEVICE_VARIANT_CACHE[ip] = variant
+    is_classic_smalltv = (variant == "smalltv_classic")
 
     if is_classic_smalltv and smalltv_gif_bytes is not None:
         # Classic SmallTV uses 80x80 animated GIF at POST /upload + GET /set?gif=10
@@ -509,3 +518,132 @@ def get_device_brightness(device_ip: str) -> Optional[int]:
     except Exception:
         pass
     return None
+
+
+# --- NTP Time Synchronization (SNTP UDP 123 + HTTPS Date fallback) ---
+KST = timezone(timedelta(hours=9))
+NTP_EPOCHS_DELTA = 2208988800  # 1900-01-01 to 1970-01-01 in seconds
+NTP_TTL_SEC = 600  # Re-sync NTP offset every 10 minutes
+
+_NTP_STATE: Dict[str, Any] = {
+    "offset_sec": 0.0,
+    "last_sync_mono": 0.0,
+    "last_sync_str": "",
+    "server": "time.google.com",
+    "synced": False,
+    "rtt_ms": 0.0,
+}
+
+
+def _query_sntp(host: str, timeout: float = 2.0) -> Tuple[float, float]:
+    """Queries an SNTP server on UDP port 123 and returns (offset_seconds, rtt_ms)."""
+    packet = b"\x1b" + 47 * b"\x00"
+    t0 = time.time()
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(timeout)
+        sock.sendto(packet, (host, 123))
+        data, _ = sock.recvfrom(1024)
+    t1 = time.time()
+    if len(data) < 48:
+        raise ValueError("Invalid NTP response packet")
+    unpacked = struct.unpack("!12I", data[:48])
+    tx_sec = unpacked[10] - NTP_EPOCHS_DELTA
+    tx_frac = unpacked[11] / float(1 << 32)
+    ntp_ts = tx_sec + tx_frac
+    rtt = t1 - t0
+    offset = (ntp_ts + rtt / 2.0) - t1
+    return offset, rtt * 1000.0
+
+
+def sync_ntp_offset(preferred_server: str = "time.google.com", force: bool = False) -> Dict[str, Any]:
+    """
+    Synchronizes clock offset against time.google.com (with fallback NTP servers & HTTPS Date header).
+    """
+    server = (preferred_server or "time.google.com").strip()
+    now_mono = time.monotonic()
+    if (
+        not force
+        and _NTP_STATE["synced"]
+        and _NTP_STATE["server"] == server
+        and (now_mono - _NTP_STATE["last_sync_mono"] < NTP_TTL_SEC)
+    ):
+        return dict(_NTP_STATE)
+
+    candidates = [server]
+    for fb in ("time.google.com", "time.apple.com", "kr.pool.ntp.org", "time.cloudflare.com"):
+        if fb not in candidates:
+            candidates.append(fb)
+
+    for host in candidates:
+        try:
+            offset, rtt_ms = _query_sntp(host, timeout=1.8)
+            _NTP_STATE.update(
+                {
+                    "offset_sec": offset,
+                    "last_sync_mono": now_mono,
+                    "last_sync_str": datetime.fromtimestamp(time.time() + offset, tz=KST).strftime("%H:%M:%S"),
+                    "server": host,
+                    "synced": True,
+                    "rtt_ms": round(rtt_ms, 1),
+                }
+            )
+            return dict(_NTP_STATE)
+        except Exception:
+            continue
+
+    # Fallback if UDP 123 is blocked by firewall: use HTTPS Date header from Google
+    try:
+        t0 = time.time()
+        req = urllib.request.Request("https://www.google.com/generate_204", method="HEAD")
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
+            date_hdr = resp.headers.get("Date")
+        t1 = time.time()
+        if date_hdr:
+            srv_dt = email.utils.parsedate_to_datetime(date_hdr)
+            offset = srv_dt.timestamp() - ((t0 + t1) / 2.0)
+            _NTP_STATE.update(
+                {
+                    "offset_sec": offset,
+                    "last_sync_mono": now_mono,
+                    "last_sync_str": datetime.fromtimestamp(time.time() + offset, tz=KST).strftime("%H:%M:%S"),
+                    "server": "google.com (HTTPS)",
+                    "synced": True,
+                    "rtt_ms": round((t1 - t0) * 1000.0, 1),
+                }
+            )
+    except Exception:
+        pass
+
+    return dict(_NTP_STATE)
+
+
+def get_ntp_now(preferred_server: str = "time.google.com") -> datetime:
+    """
+    Returns current KST (Asia/Seoul) naive datetime accurately adjusted by NTP server offset.
+    Even if the Mac's local system clock is wrong or drifts, this returns true NTP time!
+    """
+    state = sync_ntp_offset(preferred_server=preferred_server, force=False)
+    true_ts = time.time() + float(state.get("offset_sec", 0.0))
+    return datetime.fromtimestamp(true_ts, tz=KST).replace(tzinfo=None)
+
+
+def get_ntp_status() -> Dict[str, Any]:
+    """Returns current NTP synchronization state for UI display."""
+    state = dict(_NTP_STATE)
+    true_ts = time.time() + float(state.get("offset_sec", 0.0))
+    state["current_kst"] = datetime.fromtimestamp(true_ts, tz=KST).strftime("%Y-%m-%d %H:%M:%S")
+    return state
+
+
+def set_device_ntp(device_ip: str, ntp_server: str = "time.google.com") -> Dict[str, Any]:
+    """Configures the GeekMagic hardware's internal NTP server (/set?ntp=...)."""
+    ip = device_ip.strip().replace("http://", "").replace("https://", "").split("/")[0]
+    srv = (ntp_server or "time.google.com").strip()
+    if not ip:
+        return {"ok": False, "error": "기기 IP 주소가 없습니다."}
+    try:
+        url = f"http://{ip}/set?ntp={urllib.parse.quote(srv)}"
+        with urllib.request.urlopen(url, timeout=4.0) as r:
+            return {"ok": True, "ip": ip, "ntp_server": srv, "status": r.status}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

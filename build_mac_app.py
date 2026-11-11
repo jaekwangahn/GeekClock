@@ -151,7 +151,7 @@ if [ -n "$ver" ] && [ -d "$VENDOR_DIR/$ver" ]; then
 fi
 
 cd "$APP_DIR"
-nohup "$PY_BIN" "$APP_DIR/studio.py" >>"$LOG_FILE" 2>&1 &
+nohup /usr/bin/caffeinate -i "$PY_BIN" "$APP_DIR/studio.py" >>"$LOG_FILE" 2>&1 &
 exit 0
 """
 
