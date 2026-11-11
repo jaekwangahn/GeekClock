@@ -193,7 +193,7 @@ def probe_geekmagic_ip(ip: str, timeout: float = 0.75) -> Optional[Dict[str, Any
 
     info: Dict[str, Any] = {"ip": ip, "model": "GeekMagic SmallTV", "variant": "smalltv", "free_kb": None}
 
-    for path in ("/space.json", "/app.json", "/v.json", "/city.json", "/"):
+    for path in ("/v.json", "/space.json", "/app.json", "/city.json", "/"):
         try:
             req = urllib.request.Request(f"http://{ip}{path}", headers={"User-Agent": "GeekMagicScanner/1.0"})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -208,9 +208,15 @@ def probe_geekmagic_ip(ip: str, timeout: float = 0.75) -> Optional[Dict[str, Any
                         return info
                 elif path in ("/app.json", "/v.json"):
                     data = json.loads(raw)
+                    if data.get("standalone"):
+                        info["model"] = f"Chiikawa Standalone ({data.get('v', 'V1.0')})"
+                        info["version"] = str(data.get("v") or "Chiikawa-Standalone-V1.0")
+                        info["variant"] = "chiikawa_standalone"
+                        info["standalone"] = True
+                        return info
                     if any(k in data for k in ("ver", "version", "theme", "brt", "model", "m")):
                         info["model"] = str(data.get("model") or data.get("m") or "GeekMagic SmallTV-Ultra")
-                        info["version"] = str(data.get("ver") or data.get("version") or "")
+                        info["version"] = str(data.get("ver") or data.get("version") or data.get("v") or "")
                         info["variant"] = "ultra_pro"
                         return info
                 elif path == "/city.json":
@@ -303,6 +309,110 @@ def set_smalltv_clock_colors(ip: str, theme_key: str = "pink") -> None:
         urllib.request.urlopen(f"http://{ip}/set?{q}", timeout=4.0).read()
     except Exception:
         pass
+
+
+def render_standalone_msg_bmp_hex(text: str) -> str:
+    """Renders arbitrary Korean text to a 196x18 4-bit grayscale alpha hex string for Chiikawa Standalone firmware."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    try:
+        from PIL import Image, ImageDraw
+        import chiikawa_art as art
+        W, H = 196, 18
+        cv = Image.new("L", (W * 2, H * 2), 0)
+        draw = ImageDraw.Draw(cv)
+        font = art.load_font(24, weight="bold")
+        for sz in (25, 23, 21, 19, 17):
+            font = art.load_font(sz, weight="bold")
+            tb = draw.textbbox((0, 0), text, font=font)
+            if (tb[2] - tb[0]) <= W * 2 - 8:
+                break
+        tb = draw.textbbox((0, 0), text, font=font)
+        tw, th = tb[2] - tb[0], tb[3] - tb[1]
+        tx = max(4, (W * 2 - tw) // 2)
+        ty = (H * 2 - th) // 2 - tb[1]
+        draw.text((tx, ty), text, font=font, fill=255)
+        sm = cv.resize((W, H), Image.Resampling.LANCZOS)
+        px = list(sm.getdata())
+        out = bytearray()
+        for i in range(0, W * H, 2):
+            a1 = min(15, (px[i] + 8) >> 4)
+            a2 = min(15, (px[i + 1] + 8) >> 4)
+            out.append((a1 << 4) | a2)
+        return out.hex()
+    except Exception:
+        return ""
+
+
+def push_standalone_config(device_ip: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Pushes configuration & Korean text bitmap directly to Chiikawa Standalone firmware (/api/config)."""
+    ip = device_ip.strip().replace("http://", "").replace("https://", "").split("/")[0]
+    city_key = cfg.get("city_key", "seoul")
+    city_info = KOREAN_CITIES.get(city_key, KOREAN_CITIES["seoul"])
+    city_label = (cfg.get("city_label") or "").strip() or city_info["name"]
+
+    char_val = cfg.get("character", "chiikawa")
+    if char_val not in ("chiikawa", "hachiware", "usagi", "trio"):
+        char_val = "chiikawa"
+
+    payload = {
+        "character": char_val,
+        "theme": cfg.get("theme", "pink"),
+        "brightness": max(3, min(100, int(cfg.get("brightness", 80)))),
+        "anim": 1 if cfg.get("as_gif", True) else 0,
+        "use12h": 1 if cfg.get("use_12h", False) else 0,
+        "showSec": 1,
+        "ntpServer": (cfg.get("ntp_server") or "time.google.com").strip(),
+        "city": city_label,
+        "lat": float(city_info["lat"]),
+        "lon": float(city_info["lon"]),
+        "customText": (cfg.get("custom_text") or "").strip(),
+        "ddayTitle": (cfg.get("dday_title") or "").strip(),
+        "ddayDate": (cfg.get("dday_date") or "").strip(),
+    }
+    try:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://{ip}/api/config",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+        with urllib.request.urlopen(req, timeout=5.0) as r:
+            _ = r.read()
+
+        import chiikawa_art as art
+        dday_str = art.calculate_dday(payload["ddayDate"])
+        ctext = payload["customText"]
+        dtitle = payload["ddayTitle"]
+        if dday_str and ctext:
+            full_line = f"[{dtitle + ' ' if dtitle else ''}{dday_str}] {ctext}"
+        elif dday_str:
+            full_line = f"{dtitle + ' ' if dtitle else ''}{dday_str}"
+        else:
+            full_line = ctext
+
+        bmp_hex = render_standalone_msg_bmp_hex(full_line)
+        req_bmp = urllib.request.Request(
+            f"http://{ip}/api/msg_bmp",
+            data=bmp_hex.encode("ascii"),
+            method="POST",
+            headers={"Content-Type": "text/plain"},
+        )
+        with urllib.request.urlopen(req_bmp, timeout=5.0) as r2:
+            _ = r2.read()
+
+        return {
+            "ok": True,
+            "ip": ip,
+            "variant": "chiikawa_standalone",
+            "standalone": True,
+            "remote_path": "/api/config (독립형 내장 펌웨어)",
+            "bytes": len(body),
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"독립형 시계({ip}) 설정 전송 실패: {e}"}
 
 
 def push_to_geekmagic(

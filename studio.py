@@ -28,6 +28,7 @@ from geekmagic_client import (
     get_ntp_now,
     get_ntp_status,
     probe_geekmagic_ip,
+    push_standalone_config,
     push_to_geekmagic,
     set_device_ntp,
     sync_ntp_offset,
@@ -130,6 +131,16 @@ def build_and_push_now(
 ) -> Dict[str, Any]:
     with PUSH_LOCK:
         ntp_srv = cfg.get("ntp_server", "time.google.com")
+        dev_ip = (cfg.get("device_ip") or "").strip()
+        if dev_ip:
+            dev_info = probe_geekmagic_ip(dev_ip, timeout=2.0)
+            if dev_info and dev_info.get("variant") == "chiikawa_standalone":
+                res = push_standalone_config(dev_ip, cfg)
+                with STATE_LOCK:
+                    LAST_SYNC_STATUS["last_push_time"] = get_ntp_now(ntp_srv).strftime("%H:%M:%S")
+                    LAST_SYNC_STATUS["last_result"] = res
+                return res
+
         weather = resolve_weather_for_config(cfg)
         custom_bytes = get_custom_media_bytes(cfg)
         # Use NTP-synchronized standard time + upload transfer lead compensation (~4s for GIF, ~1s for JPG)
@@ -174,7 +185,13 @@ def auto_sync_worker() -> None:
     while True:
         try:
             cfg = load_config()
-            if cfg.get("auto_sync") and cfg.get("device_ip", "").strip():
+            dev_ip = cfg.get("device_ip", "").strip()
+            if cfg.get("auto_sync") and dev_ip:
+                # If device runs Chiikawa Standalone firmware, it syncs NTP & weather by itself!
+                dev_info = probe_geekmagic_ip(dev_ip, timeout=1.5)
+                if dev_info and dev_info.get("variant") == "chiikawa_standalone":
+                    time.sleep(15.0)
+                    continue
                 as_gif = bool(cfg.get("as_gif", True))
                 ntp_srv = cfg.get("ntp_server", "time.google.com")
                 lead_sec = 4 if as_gif else 1
