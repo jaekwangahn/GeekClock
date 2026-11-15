@@ -69,6 +69,7 @@ input[type=range]{flex:1;accent-color:var(--pink);}
 .hw-list{display:grid;grid-template-columns:minmax(100px,.8fr) minmax(0,1.7fr);margin:0;font-size:12px;line-height:1.65;}
 .hw-list dt,.hw-list dd{margin:0;padding:7px 0;border-bottom:1px solid #f3e7ed;overflow-wrap:anywhere;}
 .hw-list dt{color:var(--sub);padding-right:10px;}.hw-list dd{font-weight:600;}
+.ble-guide code{display:inline-block;padding:2px 5px;border-radius:5px;background:#fff0f5;color:#99516d;overflow-wrap:anywhere;}.ble-guide ol{padding-left:20px;margin:10px 0;}.ble-guide li{margin:7px 0;}.ble-guide a{color:#b74e7c;}
 .hw-note{font-size:11.5px;color:var(--sub);line-height:1.7;margin:10px 0 0;}
 @media(max-width:460px){.screen-tabs{grid-template-columns:repeat(2,minmax(0,1fr));}}
 @media(max-width:370px){.hw-list{grid-template-columns:minmax(90px,.75fr) minmax(0,1.4fr);font-size:11.5px;}}
@@ -269,6 +270,25 @@ input[type=range]{flex:1;accent-color:var(--pink);}
 </div>
 
 <button class="btn" type="button" onclick="saveAll()">💾 설정 저장하기 (맥북 꺼도 영구 유지)</button>
+
+<section class="card ble-guide" id="bluetoothCard" aria-labelledby="bluetoothHeading" style="margin-top:14px" hidden>
+  <h2 id="bluetoothHeading">📱 블루투스 스마트폰 제어</h2>
+  <div class="status" id="bluetoothStatus" role="status" aria-live="polite">BLE 상태를 확인하고 있어요.</div>
+  <dl class="hw-list" id="bluetoothDetails"></dl>
+  <p class="pet-hint">Wi-Fi와 별개로 가까운 스마트폰에서 화면·캐릭터·밝기·뽀모도로·다마고치·집 꾸미기를 제어할 수 있어요. 휴대폰 설정의 일반 페어링 목록 대신 BLE 앱에서 연결해 주세요.</p>
+  <details>
+    <summary class="pet-hint" style="cursor:pointer;font-weight:700">아이폰·안드로이드 연결 방법</summary>
+    <ol class="pet-hint">
+      <li><a href="https://www.nordicsemi.com/Products/Development-tools/nRF-Connect-for-mobile" target="_blank" rel="noopener noreferrer">nRF Connect for Mobile</a> 앱을 설치하고 블루투스 사용 권한을 허용해 주세요.</li>
+      <li>앱에서 Scan → <strong>Chiikawa-PRO</strong> → Connect를 선택해 주세요. 다른 BLE 앱이 연결 중이면 먼저 연결을 해제해 주세요.</li>
+      <li>Nordic UART 서비스에서 <strong>TX (…0003)</strong>의 알림(Notify)을 켜고, <strong>RX (…0002)</strong>에 Text/UTF-8 방식으로 명령을 써 주세요.</li>
+      <li>예: <code>screen pet</code>, <code>pomo start</code>, <code>pet feed</code>. 각 명령 뒤에는 실제 줄바꿈(LF)을 붙여 주세요. 앱에 줄바꿈 옵션이 없으면 <code>screen pet</code>의 Hex 값 <code>73 63 72 65 65 6E 20 70 65 74 0A</code>를 보낼 수 있어요.</li>
+    </ol>
+    <p class="pet-hint">RX UUID: <code>6e400002-b5a3-f393-e0a9-e50e24dcca9e</code><br>TX UUID: <code>6e400003-b5a3-f393-e0a9-e50e24dcca9e</code></p>
+    <p class="pet-hint">명령: <code>status</code> · <code>screen clock</code> · <code>screen pomodoro</code> · <code>char next</code> · <code>bright 85</code> · <code>pet feed</code> · <code>pet play</code> · <code>pet sleep</code> · <code>pomo start</code> · <code>pomo pause</code> · <code>pomo reset</code> · <code>pomo skip</code> · <code>room buy 7</code> · <code>room equip 7</code> · <code>room clear 3</code></p>
+  </details>
+  <p class="pet-hint"><a href="/ble-remote">버튼형 BLE 리모컨 열기</a> · 이 기기의 HTTP 주소에서는 브라우저 BLE 연결이 제한됩니다. 리모컨 HTML을 HTTPS로 제공하고 지원되는 Android Chrome에서 열면 버튼으로 조작할 수 있어요. 아이폰은 위 BLE 앱을 이용해 주세요.</p>
+</section>
 
 <details class="card hardware" id="hardwareCard" style="margin-top:14px" hidden>
   <summary>🔎 하드웨어 사양</summary>
@@ -666,8 +686,22 @@ function renderHardware(h){
   ]);
 }
 
+function renderBluetooth(b){
+  const card=document.getElementById('bluetoothCard');
+  if(!b||typeof b.enabled!=='boolean'){card.hidden=true;return;}
+  card.hidden=false;
+  const state=!b.enabled?'BLE 비활성':!b.ready?'BLE 시작 실패':b.connected?'스마트폰 연결됨':b.advertising?'연결 대기 · 스마트폰 앱에서 검색해 주세요':'BLE 준비됨';
+  document.getElementById('bluetoothStatus').textContent=state+(b.lastError?' · '+b.lastError:'');
+  hardwareRows('bluetoothDetails',[
+    ['기기 이름',b.name||'Chiikawa-PRO'],
+    ['통신 방식','Bluetooth LE · Nordic UART'],
+    ['처리한 명령',Number.isInteger(b.rxCommands)?b.rxCommands+'회':'확인 불가']
+  ]);
+}
+
 function renderDeviceExtras(d){
   renderHardware(d.hardware);
+  renderBluetooth(d.bluetooth);
   renderMario(d.mario);
   if(!petBusy) renderPet(d.pet);
   if(!screenBusy) renderScreenMode(d.screenMode);

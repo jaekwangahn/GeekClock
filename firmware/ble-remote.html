@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#ff78a6">
+<title>치이카와 BLE 리모컨</title>
+<style>
+:root{color-scheme:light;--pink:#e9558d;--ink:#4b3542;--muted:#876a79;--line:#f3cddd;--soft:#fff0f6}*{box-sizing:border-box}body{margin:0;background:#fff8fb;color:var(--ink);font:15px/1.65 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",sans-serif;padding:18px;max-width:600px;margin-inline:auto}header{background:linear-gradient(130deg,#ffe0ec,#e4f2ff);padding:22px;border:2px solid white;border-radius:24px}h1{font-size:23px;margin:0 0 5px}h2{font-size:16px;color:#bd3b6d;margin:0 0 12px}h3{font-size:13px;margin:16px 0 7px}p{margin:8px 0}.sub{font-size:12px;color:var(--muted)}.card{margin-top:14px;background:white;border:1px solid var(--line);border-radius:19px;padding:17px}button{border:1px solid var(--line);background:white;color:var(--ink);font:inherit;font-size:13px;font-weight:600;line-height:1.4;min-height:44px;padding:11px 8px;border-radius:12px;cursor:pointer}button.primary{background:var(--pink);border-color:var(--pink);color:white}button.active{background:var(--soft);border-color:var(--pink);color:#b83e6b}button:disabled{opacity:.45;cursor:default}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.thirds{grid-template-columns:repeat(3,minmax(0,1fr))}.wide{grid-column:1/-1}fieldset{border:0;margin:0;padding:0;min-width:0}label{display:block;font-size:13px;font-weight:700;margin:12px 0 5px}input[type=range]{width:100%;accent-color:var(--pink)}.timer{font-size:49px;text-align:center;line-height:1.3;color:#bc4170;font-weight:800;font-variant-numeric:tabular-nums}.center{text-align:center}.pill{display:inline-block;border-radius:99px;background:#fff2d4;color:#875e25;font-weight:700;padding:4px 10px;font-size:12px}.shop-item{padding:11px;border:1px solid var(--line);border-radius:13px}.shop-item strong{font-size:13px}.shop-item button{width:100%;margin-top:8px}.shop-item.equipped{background:var(--soft);border-color:var(--pink)}.shop-item small{display:block;font-size:11px;color:var(--muted)}.status{font-weight:600}.warning{border-color:#eac890;background:#fff9eb}.notice{white-space:pre-wrap;overflow-wrap:anywhere;min-height:24px;color:#a03e68}code{background:var(--soft);padding:2px 5px;border-radius:5px;font-size:12px;overflow-wrap:anywhere}a{color:#b74471}summary{cursor:pointer;font-weight:700;font-size:13px}ol{padding-left:20px;font-size:13px}li{margin:8px 0}footer{font-size:11px;text-align:center;color:var(--muted);padding:24px 0}#petStats{white-space:pre-line}button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid #76b6e7;outline-offset:3px}@media(max-width:350px){body{padding:12px}.thirds{grid-template-columns:1fr 1fr}button{font-size:12px}}
+</style>
+</head>
+<body>
+<header><h1>📱 치이카와 BLE 리모컨</h1><div class="sub">스몰티비 프로 · 가까이에서 블루투스로 조작해요</div></header>
+<section class="card" aria-label="블루투스 연결">
+  <div class="status" id="connection" role="status" aria-live="polite">연결되지 않았어요</div>
+  <div class="sub" id="support"></div>
+  <div class="grid" style="margin-top:12px"><button class="primary" id="connect">기기 연결</button><button id="disconnect" disabled>연결 해제</button></div>
+  <button id="refresh" style="width:100%;margin-top:8px" disabled>↻ 기기 상태 새로고침</button>
+  <p id="feedback" class="notice" role="status" aria-live="polite"></p>
+</section>
+<section class="card warning" id="compatibility" hidden>
+  <h2>이 환경에서는 BLE 앱으로 연결해 주세요</h2>
+  <p class="sub">버튼형 리모컨은 HTTPS 주소와 Web Bluetooth 지원 브라우저가 필요해요. Android Chrome에서 HTTPS로 제공된 이 파일을 열어 주세요. 기기의 HTTP 주소와 아이폰 브라우저에서는 아래 앱 방식으로 제어할 수 있어요.</p>
+  <a href="#appGuide">nRF Connect 연결 방법 보기 ↓</a>
+</section>
+<fieldset id="controls" disabled>
+<section class="card"><h2>📺 화면 선택</h2><div class="grid" id="screens">
+<button data-command="screen clock" data-screen="clock" aria-pressed="false">시계</button><button data-command="screen pet" data-screen="pet" aria-pressed="false">다마고치</button><button data-command="screen exchange" data-screen="exchange" aria-pressed="false">엔화 환율</button><button data-command="screen mario" data-screen="mario" aria-pressed="false">마리오 시계</button><button class="wide" data-command="screen pomodoro" data-screen="pomodoro" aria-pressed="false">치이카와 뽀모도로</button></div>
+<div class="grid" style="margin-top:8px"><button data-command="fx refresh">환율 새로고침</button><button data-command="mario jump">마리오 점프</button></div></section>
+<section class="card"><h2>🎀 캐릭터와 밝기</h2><div class="grid" id="characters"><button data-command="char chiikawa" data-char="chiikawa" aria-pressed="false">치이카와</button><button data-command="char hachiware" data-char="hachiware" aria-pressed="false">하치와레</button><button data-command="char usagi" data-char="usagi" aria-pressed="false">우사기</button><button data-command="char trio" data-char="trio" aria-pressed="false">삼총사</button></div><label for="brightness">화면 밝기 <span id="brightnessValue">—</span></label><input type="range" id="brightness" min="3" max="100" value="85"><button id="setBrightness" style="width:100%">밝기 적용</button></section>
+<section class="card"><h2>🍅 치이카와 뽀모도로</h2><div class="center sub" id="phase">기기 상태를 기다리고 있어요</div><div class="timer" id="timer">—:—</div><p class="center sub" id="pomoSummary">집중을 완료하면 집 꾸미기 코인을 받아요</p><div class="grid"><button class="primary" data-command="pomo start">시작·이어하기</button><button data-command="pomo pause">일시정지</button><button data-command="pomo reset">집중으로 초기화</button><button data-command="pomo skip">보상 없이 건너뛰기</button></div><p class="sub">구간 완료 후 다음 구간은 직접 시작해 주세요. 시간 설정은 기존 Wi-Fi 설정 화면에서 바꿀 수 있어요.</p></section>
+<section class="card"><h2>🌱 다마고치 돌보기</h2><p class="sub" id="petStats">기기 상태를 기다리고 있어요</p><div class="grid thirds"><button data-command="pet feed">🍙 밥 주기</button><button data-command="pet play">💗 놀아 주기</button><button data-command="pet sleep">🌙 쉬게 하기</button></div><p class="sub">먼저 다마고치 화면을 선택해 주세요. 돌보기 대기시간이나 체력이 부족하면 기기가 알려줘요.</p></section>
+<section class="card"><h2>🏠 다마고치 집 꾸미기 <span id="wallet" class="pill">— 코인</span></h2><p class="sub">구매하면 바로 적용돼요. 보유한 아이템은 무료로 바꿀 수 있어요.</p><div id="shop"></div></section>
+</fieldset>
+<section class="card" id="appGuide"><details open><summary>아이폰·안드로이드 BLE 앱 연결 방법</summary><ol><li><a href="https://www.nordicsemi.com/Products/Development-tools/nRF-Connect-for-mobile" target="_blank" rel="noopener noreferrer">nRF Connect for Mobile</a>을 설치하고 블루투스 권한을 허용해 주세요.</li><li>Scan → <strong>Chiikawa-PRO</strong> → Connect를 선택해 주세요. 휴대폰 설정의 일반 페어링 목록을 이용하지 않아도 돼요.</li><li>Nordic UART 서비스에서 TX <code>…0003</code>의 알림(Notify)을 켜 주세요.</li><li>RX <code>…0002</code>에 Text/UTF-8 방식으로 명령을 쓰고 실제 줄바꿈(LF)으로 끝내 주세요. 예: <code>screen pet</code>, <code>pomo start</code>, <code>pet feed</code>. 문자 <code>\n</code> 두 글자 대신 앱의 줄바꿈 옵션을 사용해 주세요.</li><li>줄바꿈 옵션이 없다면 Hex 방식으로 <code>screen pet</code> 명령의 바이트 <code>73 63 72 65 65 6E 20 70 65 74 0A</code>를 보낼 수 있어요.</li></ol><p class="sub">한 번에 한 스마트폰/앱을 연결해 주세요. 연결이 끊기면 기기는 다시 검색 가능한 상태로 돌아갑니다.</p><p class="sub">서비스 <code>6e400001-b5a3-f393-e0a9-e50e24dcca9e</code><br>RX <code>6e400002-b5a3-f393-e0a9-e50e24dcca9e</code><br>TX <code>6e400003-b5a3-f393-e0a9-e50e24dcca9e</code></p></details></section>
+<footer>Chiikawa SmallTV-PRO · Nordic UART BLE · 기기의 실제 응답으로 상태를 표시합니다</footer>
+<script>
+'use strict';
+const SERVICE='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const RX='6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+const TX='6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+const ITEMS=[{id:1,slot:0,name:'소다 벽지',price:20},{id:2,slot:0,name:'별밤 벽지',price:35},{id:3,slot:1,name:'딸기 러그',price:20},{id:4,slot:1,name:'별 러그',price:30},{id:5,slot:2,name:'구름 침대',price:40},{id:6,slot:2,name:'달빛 침대',price:60},{id:7,slot:3,name:'초록 화분',price:15},{id:8,slot:3,name:'별빛 스탠드',price:25}];
+const SLOTS=['wallpaper','rug','bed','decor'];
+const SLOT_NAMES=['벽지','러그','침대','장식'];
+const $=id=>document.getElementById(id);
+let device=null,rx=null,tx=null,connecting=false,writeBusy=false,state=null,receivedAt=0;
+let decoder=new TextDecoder(),receiveBuffer='',writeChain=Promise.resolve(),connectionGeneration=0,brightnessDirty=false,pendingAck=null;
+const ERROR_MESSAGES={invalid_command:'명령을 확인해 주세요.',pet_mode_required:'먼저 다마고치 화면을 선택해 주세요.',pet_needs_food_rest:'밥이나 휴식으로 체력을 채운 뒤 놀아 주세요.',pet_sleeping:'이미 편안하게 쉬고 있어요.',action_cooldown:'잠깐만요! 조금 뒤 다시 돌봐 주세요.',timer_state_conflict:'현재 타이머 상태에서는 이 동작을 할 수 없어요.',storage_unavailable:'기기 저장에 실패했어요. 잠시 뒤 다시 시도해 주세요.',already_owned:'이미 보유한 아이템이에요. 적용하기를 선택해 주세요.',insufficient_coins:'코인이 부족해요. 집중을 완료해 모아 주세요.',item_not_owned:'먼저 아이템을 구매해 주세요.',invalid_item:'아이템 번호를 확인해 주세요.',wifi_time_required:'먼저 Wi-Fi 시간 동기화가 필요해요.',refresh_cooldown:'환율 조회는 잠시 뒤 다시 시도해 주세요.',mario_mode_required:'먼저 마리오 시계 화면을 선택해 주세요.',ota_busy:'펌웨어 업데이트 중이에요. 재시작 후 다시 연결해 주세요.'};
+function errorMessage(code){return ERROR_MESSAGES[code]||code||'기기가 요청을 처리하지 못했어요.';}
+function finishAck(error){const ack=pendingAck;if(!ack)return;pendingAck=null;clearTimeout(ack.timer);if(error)ack.reject(error);else ack.resolve();}
+const supported=!!(globalThis.isSecureContext&&navigator.bluetooth);
+function feedback(message){$('feedback').textContent=message;}
+function syncConnection(){
+  const connected=!!(device&&device.gatt.connected&&rx);
+  $('controls').disabled=!connected;
+  $('connect').disabled=!supported||connecting||connected;
+  $('connect').textContent=connecting?'연결 중…':device?'다시 연결':'기기 연결';
+  $('disconnect').disabled=!device||!device.gatt.connected;
+  $('refresh').disabled=!connected||writeBusy;
+  $('connection').textContent=connecting?'Chiikawa-PRO를 연결하고 있어요':connected?'Chiikawa-PRO 연결됨':'연결되지 않았어요';
+}
+function resetConnection(){
+  connectionGeneration++;finishAck(new Error('연결이 끊겼어요. 다시 연결해 주세요.'));rx=null;
+  if(tx)tx.removeEventListener('characteristicvaluechanged',onNotification);
+  tx=null;decoder=new TextDecoder();receiveBuffer='';state=null;writeBusy=false;writeChain=Promise.resolve();brightnessDirty=false;
+  $('timer').textContent='—:—';$('phase').textContent='기기 상태를 기다리고 있어요';
+  $('pomoSummary').textContent='다시 연결하면 최신 상태를 불러와요';
+  $('petStats').textContent='연결이 끊겼어요';$('wallet').textContent='— 코인';
+  document.querySelectorAll('[data-screen],[data-char]').forEach(button=>{button.classList.remove('active');button.setAttribute('aria-pressed','false');});
+  syncConnection();
+}
+function onDisconnected(){resetConnection();feedback('연결이 끊겼어요. 기기를 가까이 두고 다시 연결해 주세요.');}
+async function connect(){
+  if(!supported||connecting)return;
+  connecting=true;syncConnection();feedback('기기에서 Chiikawa-PRO를 선택해 주세요.');
+  try{
+    if(!device){
+      device=await navigator.bluetooth.requestDevice({filters:[{namePrefix:'Chiikawa-PRO'}],optionalServices:[SERVICE]});
+      device.addEventListener('gattserverdisconnected',onDisconnected);
+    }
+    const server=await device.gatt.connect();
+    const service=await server.getPrimaryService(SERVICE);
+    const nextRx=await service.getCharacteristic(RX);
+    const nextTx=await service.getCharacteristic(TX);
+    decoder=new TextDecoder();receiveBuffer='';
+    tx=nextTx;tx.addEventListener('characteristicvaluechanged',onNotification);
+    await tx.startNotifications();
+    rx=nextRx;feedback('연결했어요. 최신 상태를 불러오고 있어요.');
+    await send('status');
+  }catch(error){
+    if(device&&device.gatt.connected)device.gatt.disconnect();
+    resetConnection();
+    feedback(error&&error.name==='NotFoundError'?'기기 선택을 취소했어요. 다시 연결할 수 있어요.':'연결하지 못했어요. 다른 BLE 앱의 연결을 해제하고 다시 시도해 주세요. '+(error.message||''));
+  }finally{connecting=false;syncConnection();}
+}
+function onNotification(event){
+  const view=event.target.value;
+  receiveBuffer+=decoder.decode(new Uint8Array(view.buffer,view.byteOffset,view.byteLength),{stream:true});
+  if(receiveBuffer.length>4096){receiveBuffer='';decoder=new TextDecoder();feedback('응답이 너무 길어요. 기기 상태를 새로고침해 주세요.');return;}
+  let newline;
+  while((newline=receiveBuffer.indexOf('\n'))>=0){
+    const line=receiveBuffer.slice(0,newline).trim();receiveBuffer=receiveBuffer.slice(newline+1);
+    if(!line)continue;
+    try{
+      const result=JSON.parse(line);
+      if(!result||typeof result!=='object')continue;
+      renderState(result);
+      if(pendingAck&&result.command===pendingAck.command){
+        if(result.ok===false){const error=new Error(errorMessage(result.error));feedback(error.message);finishAck(error);}
+        else if(result.ok===true){feedback('기기에 반영했어요.');finishAck();}
+      }else if(result.ok===false)feedback(errorMessage(result.error));
+    }catch(error){feedback('기기 응답을 읽지 못했어요. 상태 새로고침을 눌러 주세요.');}
+  }
+}
+function send(command){
+  const generation=connectionGeneration;
+  const payload=new TextEncoder().encode(command+'\n');
+  if(payload.length>20||/[\r\n]/.test(command))return Promise.reject(new Error('명령 길이를 확인해 주세요.'));
+  const operation=writeChain.catch(()=>{}).then(async()=>{
+    if(generation!==connectionGeneration||!rx||!device||!device.gatt.connected)throw new Error('먼저 기기를 연결해 주세요.');
+    writeBusy=true;syncConnection();feedback('기기에 전하고 있어요…');
+    const characteristic=rx;
+    try{
+      await new Promise((resolve,reject)=>{
+        pendingAck={command,resolve,reject,timer:setTimeout(()=>finishAck(new Error('기기 응답을 기다리는 시간이 지났어요. 상태를 새로고침해 주세요.')),10000)};
+        Promise.resolve().then(()=>typeof characteristic.writeValueWithResponse==='function'?characteristic.writeValueWithResponse(payload):characteristic.writeValue(payload)).catch(error=>finishAck(error));
+      });
+    }finally{if(generation===connectionGeneration){writeBusy=false;syncConnection();}}
+  });
+  writeChain=operation;return operation;
+}
+function command(command){send(command).catch(error=>feedback(error.message||'전송하지 못했어요. 다시 시도해 주세요.'));}
+function renderState(result){
+  if(typeof result.screen!=='string')return;
+  state=result;receivedAt=Date.now();
+  document.querySelectorAll('[data-screen]').forEach(button=>{const active=button.dataset.screen===result.screen;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
+  document.querySelectorAll('[data-char]').forEach(button=>{const active=button.dataset.char===result.character;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
+  if(Number.isFinite(result.brightness)&&!brightnessDirty){$('brightness').value=result.brightness;$('brightnessValue').textContent=result.brightness+'%';}
+  const p=result.pet;
+  if(p&&Number.isFinite(p.fullness))$('petStats').textContent=`Lv.${p.level||1} · 포만감 ${p.fullness}% · 기분 ${p.happiness}% · 체력 ${p.energy}%`;
+  renderTimer();if(result.room)renderRoom(result.room);
+}
+function renderTimer(){
+  const p=state&&state.pomodoro;if(!p||!Number.isFinite(p.remainingSeconds))return;
+  const seconds=Math.max(0,Math.ceil(p.remainingSeconds-(p.running?(Date.now()-receivedAt)/1000:0)));
+  $('timer').textContent=String(Math.floor(seconds/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0');
+  const phase={focus:'집중',short_break:'짧은 휴식',long_break:'긴 휴식'}[p.phase]||'뽀모도로';
+  $('phase').textContent=phase+' · '+(p.running?'진행 중':'일시정지');
+  $('pomoSummary').textContent=`집중 ${p.completedFocus||0}회 완료 · 총 ${p.totalFocusMinutes||0}분`;
+}
+function renderRoom(room){
+  if(!Number.isInteger(room.coins)||!Number.isInteger(room.ownedMask))return;
+  $('wallet').textContent=room.coins+' 코인';const shop=$('shop');shop.replaceChildren();
+  SLOT_NAMES.forEach((slotName,slot)=>{
+    const heading=document.createElement('h3');heading.textContent=slotName;shop.append(heading);
+    const grid=document.createElement('div');grid.className='grid';
+    ITEMS.filter(item=>item.slot===slot).forEach(item=>{
+      const owned=!!(room.ownedMask&(1<<(item.id-1))),equipped=room[SLOTS[slot]]===item.id;
+      const card=document.createElement('div');card.className='shop-item'+(equipped?' equipped':'');
+      const name=document.createElement('strong');name.textContent=item.name;
+      const price=document.createElement('small');price.textContent=owned?'보유 중 · 다시 적용 무료':item.price+' 코인';
+      const button=document.createElement('button');button.textContent=equipped?'적용 중':owned?'적용하기':'구매하고 적용';button.disabled=equipped||(!owned&&room.coins<item.price);button.addEventListener('click',()=>command('room '+(owned?'equip ':'buy ')+item.id));card.append(name,price,button);grid.append(card);
+    });
+    const clear=document.createElement('button');clear.textContent=slotName+' 기본으로';clear.className='wide';clear.disabled=room[SLOTS[slot]]===0;clear.addEventListener('click',()=>command('room clear '+slot));grid.append(clear);shop.append(grid);
+  });
+}
+$('connect').addEventListener('click',connect);
+$('disconnect').addEventListener('click',()=>{if(device&&device.gatt.connected)device.gatt.disconnect();});
+$('refresh').addEventListener('click',()=>command('status'));
+document.querySelectorAll('[data-command]').forEach(button=>button.addEventListener('click',()=>command(button.dataset.command)));
+$('brightness').addEventListener('input',()=>{brightnessDirty=true;$('brightnessValue').textContent=$('brightness').value+'%';});
+$('setBrightness').addEventListener('click',()=>{const value=Number($('brightness').value);if(Number.isInteger(value)&&value>=3&&value<=100){brightnessDirty=false;command('bright '+value);}});
+$('support').textContent=supported?'버튼을 눌러 Chiikawa-PRO를 선택해 주세요.':'HTTPS + Web Bluetooth 지원 브라우저가 필요해요. 아래 앱 연결 방법을 이용해 주세요.';
+$('compatibility').hidden=supported;
+setInterval(renderTimer,1000);syncConnection();
+</script>
+</body>
+</html>

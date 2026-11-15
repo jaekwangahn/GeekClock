@@ -100,9 +100,9 @@ V1.4에는 위의 다마고치 게임도 포함됩니다.
 힙 용량은 칩 전체 SRAM 용량이 아니며, Bluetooth 하드웨어 지원과 펌웨어 활성 상태도 별개입니다.
 플래시 동작 클럭은 기존 부트로더 헤더의 설정 대신 현재 클럭 레지스터에서 읽습니다.
 
-## SmallTV Pro 최신 펌웨어 V1.8
+## SmallTV Pro 최신 펌웨어 V1.9
 
-[OTA 펌웨어](SmallTV-PRO_Chiikawa_ESP32_V1.8.bin) · [크기 및 SHA256](SmallTV-PRO_Chiikawa_ESP32_V1.8.json)
+[OTA 펌웨어](SmallTV-PRO_Chiikawa_ESP32_V1.9.bin) · [크기 및 SHA256](SmallTV-PRO_Chiikawa_ESP32_V1.9.json)
 
 시계·다마고치 집 꾸미기·엔화 환율·마리오 타이틀 시계·치이카와 뽀모도로를 실행합니다.
 상단 더블 터치는 **시계 → 다마고치 → 엔화 환율 → 마리오 시계 → 뽀모도로 → 시계** 순서입니다.
@@ -117,6 +117,28 @@ V1.4에는 위의 다마고치 게임도 포함됩니다.
 | 뽀모도로 | 시작 / 일시정지 | 현재 집중 주기 초기화 |
 
 선택한 화면과 다마고치 상태는 재부팅 후에도 유지됩니다.
+
+## 스마트폰 블루투스 리모컨
+
+1. iPhone이나 Android에서 nRF Connect for Mobile을 열고 `Chiikawa-PRO`를 스캔해 연결합니다.
+2. Nordic UART 서비스의 TX(`6e400003…`) 알림을 켭니다.
+3. RX(`6e400002…`)에 ASCII 명령과 실제 줄바꿈(LF)을 씁니다. `screen pet`을 보내려면 Hex 모드에서 `73 63 72 65 65 6E 20 70 65 74 0A`를 입력합니다.
+
+기기 웹 설정의 Bluetooth 안내와 `/ble-remote`에서 전체 연결 절차를 볼 수 있습니다.
+[버튼형 리모컨 HTML](ble-remote.html)은 Web Bluetooth를 지원하는 브라우저에서 HTTPS로 열면 사용할 수 있습니다.
+
+| 기능 | 명령 |
+| --- | --- |
+| 상태 조회 | `status` |
+| 화면 선택 | `screen clock`, `screen pet`, `screen exchange`, `screen mario`, `screen pomodoro` |
+| 캐릭터 | `char next`, `char chiikawa`, `char hachiware`, `char usagi`, `char trio` |
+| 밝기 | `bright 85` (3~100) |
+| 다마고치 | `pet feed`, `pet play`, `pet sleep` |
+| 뽀모도로 | `pomo start`, `pomo pause`, `pomo reset`, `pomo skip` |
+| 집 꾸미기 | `room buy 7`, `room equip 7` (아이템 1~8), `room clear 3` (슬롯 0~3) |
+| 환율 및 마리오 | `fx refresh`, `mario jump` |
+
+BLE는 근거리에서 한 대씩 연결되며 PIN 없이 접속합니다. 명령 결과와 상태는 TX 알림으로 전송되는 줄바꿈 구분 JSON입니다. Wi-Fi에서 `/api/bluetooth`로 연결 상태를 확인할 수 있습니다.
 
 ## 일본 엔화 환율
 

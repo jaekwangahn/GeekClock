@@ -1,0 +1,36 @@
+{
+  "model": "GeekMagic SmallTV-PRO",
+  "version": "Chiikawa-Standalone-V1.9-SmallTV-PRO",
+  "environment": "geekmagic_pro",
+  "chip": "ESP32",
+  "bytes": 1717280,
+  "sha256": "3fa2d2c1283ca568f2fc78c01ae925a42df1a2ae08ed81d013fc176df13788ec",
+  "touchPin": 32,
+  "gestures": {
+    "single": "clock character / pet play / exchange refresh / Mario jump / pomodoro start-pause",
+    "double": "cycle five screens",
+    "long900ms": "pet feed / exchange or Mario to clock / pomodoro reset"
+  },
+  "pet": "roaming, needs, feed, play, sleep, XP, persistent state",
+  "ota": "application only; preserve existing partitions",
+  "hardware": "Live chip/CPU/flash/heap/PSRAM/OTA telemetry; board and manufacturer specs labeled separately",
+  "exchange": "100 JPY in KRW; ECB via Frankfurter; verified HTTPS, asynchronous refresh, persistent cache",
+  "screenCycle": [
+    "clock",
+    "pet",
+    "exchange",
+    "mario",
+    "pomodoro"
+  ],
+  "mario": "NES VS.SuperMario title artwork, fixed blue sky and orange sign; KST time/date, seconds, 12/24h, walking and touch jump",
+  "pomodoro": "25/5/15 configurable,4focus longbreak, pause/resume/skip, atomic coin rewards, checkpoint restores paused",
+  "room": "8 purchasable wallpaper/rug/bed/decor items, owned inventory, free re-equip, persistent virtual coins",
+  "bluetooth": {
+    "name": "Chiikawa-PRO",
+    "stack": "NimBLE-Arduino 2.5.1",
+    "serviceUuid": "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
+    "rxUuid": "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
+    "txUuid": "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
+    "protocol": "1, ASCII LF commands and newline-delimited JSON notifications"
+  }
+}

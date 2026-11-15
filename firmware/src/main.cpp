@@ -33,6 +33,9 @@
 #include "pomodoro.h"
 #include "room_decor.h"
 #include "exchange_rate.h"
+#include "ble_commands.h"
+#include "ble_remote.h"
+#include "ble_remote_gzip.h"
 #endif
 
 #if defined(CONFIG_IDF_TARGET_ESP32C2) && defined(GEEKCLOCK_XTAL_MHZ)
@@ -91,7 +94,7 @@ static bool gFsMounted = false;
 static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.1-ESP32C2";
 static constexpr const char* DEVICE_MODEL = "SDC2 (ESP32-C2)";
 #elif defined(GEEKCLOCK_SMALLTV_PRO)
-static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.8-SmallTV-PRO";
+static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.9-SmallTV-PRO";
 static constexpr const char* DEVICE_MODEL = "GeekMagic SmallTV-PRO";
 #elif defined(ARDUINO_ARCH_ESP32)
 static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.1-ESP32";
@@ -157,6 +160,8 @@ static TouchGestures gTouchGestures;
 static PetGame gPetGame;
 static PomodoroTimer gPomodoro;
 static RoomDecor gRoom;
+static BleRemote gBleRemote;
+static uint32_t gBleRxCommands = 0;
 static uint16_t gStudyRewardCoins = 0;
 static uint32_t gStudyRewardAtMs = 0;
 static uint32_t gStudyLastSaveMs = 0;
@@ -1326,6 +1331,144 @@ static String petStatusJson() {
     return j;
 }
 
+// BLE callbacks only frame/queue text. All game, display and NVS operations
+// run here on the same loop as Wi-Fi controls and physical touch gestures.
+static const char* executeBleCommand(const BleCommands::Command& command) {
+    using Kind = BleCommands::Kind;
+    const uint32_t nowMs = millis();
+    settleStudy(nowMs);
+    switch (command.kind) {
+        case Kind::Status:
+            return nullptr;
+        case Kind::Screen:
+            setScreenMode(ScreenMode(command.value));
+            return nullptr;
+        case Kind::Character: {
+            if (command.value == 0) advanceClockCharacter();
+            else {
+                static const char* const characters[] = {"chiikawa", "hachiware", "usagi", "trio"};
+                strlcpy(gCfg.character, characters[command.value - 1], sizeof(gCfg.character));
+                gAnimFrame = 0;
+                gForceRedraw = true;
+                saveConfigToFS();
+            }
+            return nullptr;
+        }
+        case Kind::Brightness:
+            gCfg.brightness = command.value;
+            applyBacklight();
+            gForceRedraw = true;
+            saveConfigToFS();
+            return nullptr;
+        case Kind::Pet: {
+            if (!gPetGame.active) return "pet_mode_required";
+            if (command.value == 1 && (gPetGame.data.energy < 8 || gPetGame.data.fullness < 4))
+                return "pet_needs_food_rest";
+            if (command.value == 2 && gPetGame.activity() == PetActivity::Sleeping)
+                return "pet_sleeping";
+            const bool accepted = command.value == 0 ? gPetGame.feed(nowMs) :
+                                  command.value == 1 ? gPetGame.play(nowMs) : gPetGame.sleep(nowMs);
+            if (!accepted) return "action_cooldown";
+            savePetState();
+            gForceRedraw = true;
+            return nullptr;
+        }
+        case Kind::Pomodoro: {
+            const PomodoroData before = gPomodoro.data;
+            const bool accepted = command.value == 0 ? gPomodoro.start(nowMs) :
+                                  command.value == 1 ? gPomodoro.pause(nowMs) :
+                                  command.value == 2 ? gPomodoro.reset(nowMs) : gPomodoro.skip(nowMs);
+            if (!accepted) return "timer_state_conflict";
+            gStudyRewardCoins = 0;
+            settleStudy(nowMs);
+            if (!saveStudyState()) {
+                gPomodoro.data = before;
+                gPomodoro.restore();
+                if (before.running) gPomodoro.start(nowMs);
+                return "storage_unavailable";
+            }
+            gForceRedraw = true;
+            return nullptr;
+        }
+        case Kind::RoomBuy:
+        case Kind::RoomEquip:
+        case Kind::RoomClear: {
+            const RoomData before = gRoom.data;
+            const RoomResult result = command.kind == Kind::RoomBuy ? gRoom.buy(command.value) :
+                                      command.kind == Kind::RoomEquip ? gRoom.equip(command.value) :
+                                      gRoom.unequip(command.value);
+            if (result == RoomResult::AlreadyOwned) return "already_owned";
+            if (result == RoomResult::InsufficientCoins) return "insufficient_coins";
+            if (result == RoomResult::NotOwned) return "item_not_owned";
+            if (result != RoomResult::Ok) return "invalid_item";
+            if (!saveStudyState()) {
+                gRoom.data = before;
+                return "storage_unavailable";
+            }
+            gForceRedraw = true;
+            return nullptr;
+        }
+        case Kind::ExchangeRefresh:
+            if (WiFi.status() != WL_CONNECTED || time(nullptr) < 1700000000)
+                return "wifi_time_required";
+            if (!gExchange.snapshot().loading && !gExchange.request(true)) return "refresh_cooldown";
+            return nullptr;
+        case Kind::MarioJump:
+            if (gScreenMode != ScreenMode::Mario) return "mario_mode_required";
+            triggerMarioJump();
+            return nullptr;
+    }
+    return "invalid_command";
+}
+
+static String bleControlStatusJson(const char* command = nullptr, const char* error = nullptr) {
+    String j;
+    j.reserve(900);
+    j = "{\"ok\":" + String(error ? "false" : "true");
+    if (command) j += ",\"command\":\"" + escapeJson(command) + "\"";
+    if (error) j += ",\"error\":\"" + escapeJson(error) + "\"";
+    j += ",\"screen\":\"" + String(screenModeName()) + "\"";
+    j += ",\"character\":\"" + escapeJson(gCfg.character) + "\"";
+    j += ",\"brightness\":" + String(gCfg.brightness);
+    j += ",\"pet\":" + petStatusJson();
+    j += ",\"pomodoro\":" + pomodoroStatusJson();
+    j += ",\"room\":{\"coins\":" + String(gRoom.data.coins);
+    j += ",\"ownedMask\":" + String(gRoom.data.ownedMask);
+    j += ",\"wallpaper\":" + String(gRoom.data.wallpaper) + ",\"rug\":" + String(gRoom.data.rug);
+    j += ",\"bed\":" + String(gRoom.data.bed) + ",\"decor\":" + String(gRoom.data.decor) + "}}";
+    return j;
+}
+
+static String bluetoothStatusJson() {
+    String j = "{\"enabled\":" + String(gBleRemote.ready() ? "true" : "false");
+    j += ",\"ready\":" + String(gBleRemote.ready() ? "true" : "false");
+    j += ",\"connected\":" + String(gBleRemote.connected() ? "true" : "false");
+    j += ",\"advertising\":" + String(gBleRemote.advertising() ? "true" : "false");
+    j += ",\"name\":\"Chiikawa-PRO\",\"transport\":\"BLE Nordic UART\",\"protocol\":1";
+    j += ",\"serviceUuid\":\"6e400001-b5a3-f393-e0a9-e50e24dcca9e\"";
+    j += ",\"rxUuid\":\"6e400002-b5a3-f393-e0a9-e50e24dcca9e\"";
+    j += ",\"txUuid\":\"6e400003-b5a3-f393-e0a9-e50e24dcca9e\"";
+    j += ",\"rxCommands\":" + String(gBleRxCommands);
+    j += ",\"lastError\":\"" + escapeJson(gBleRemote.lastError()) + "\"}";
+    return j;
+}
+
+static void serviceBleRemote() {
+    gBleRemote.loop(millis());
+    // Keep command acknowledgments intact. No game action is accepted until
+    // its preceding response has drained, bounding both work and heap use.
+    if (!gBleRemote.ready() || !gBleRemote.connected() || gBleRemote.responsePending()) return;
+    char text[BleCommands::MAX_COMMAND_BYTES + 1] = {};
+    if (gBleRemote.popCommand(text, sizeof(text))) {
+        ++gBleRxCommands;
+        BleCommands::Command command;
+        const char* error = BleCommands::parse(text, command) ? executeBleCommand(command) : "invalid_command";
+        gBleRemote.sendResponse(bleControlStatusJson(text, error));
+    } else if (gBleRemote.takeStatusRequest()) {
+        gBleRemote.sendResponse(bleControlStatusJson());
+    }
+}
+
 static String hardwareStatusJson() {
     esp_chip_info_t chip;
     esp_chip_info(&chip);
@@ -1366,8 +1509,7 @@ static String hardwareStatusJson() {
     j += ",\"chipWifiBGN\":" + String(chip.features & CHIP_FEATURE_WIFI_BGN ? "true" : "false");
     j += ",\"chipBluetoothClassic\":" + String(chip.features & CHIP_FEATURE_BT ? "true" : "false");
     j += ",\"chipBLE\":" + String(chip.features & CHIP_FEATURE_BLE ? "true" : "false");
-    // This firmware never starts a Bluetooth controller or profile.
-    j += ",\"bluetoothFirmwareEnabled\":false";
+    j += ",\"bluetoothFirmwareEnabled\":" + String(gBleRemote.ready() ? "true" : "false");
     // These are the selected board profile, not values probed from the panel.
     j += ",\"board\":{\"displayController\":\"ST7789\",\"displayWidth\":" + String(SCREEN_W);
     j += ",\"displayHeight\":" + String(SCREEN_H) + ",\"displayDiagonalInches\":1.54";
@@ -1547,6 +1689,9 @@ static void handleOtaUpload() {
     if (upload.status == UPLOAD_FILE_START) {
         gOtaSucceeded = false;
         gOtaError = "";
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+        gBleRemote.setOtaBusy(true);
+#endif
         if (gOtaRebootAtMs != 0) {
             gOtaError = "Firmware restart already pending";
             return;
@@ -1575,6 +1720,9 @@ static void handleOtaUpload() {
         Update.abort();
         gOtaSucceeded = false;
         gOtaError = "Firmware upload aborted";
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+        gBleRemote.setOtaBusy(false);
+#endif
     }
 }
 
@@ -1582,6 +1730,9 @@ static void finishOtaUpload() {
     addCors();
     server.sendHeader("Connection", "close");
     if (!gOtaSucceeded || gOtaError.length() != 0) {
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+        gBleRemote.setOtaBusy(false);
+#endif
         String error = gOtaError.length() ? gOtaError : String("No firmware file received");
         server.send(400, "text/plain; charset=utf-8", "Update failed: " + error);
         return;
@@ -1685,6 +1836,7 @@ static void setupWebServer() {
         j += "\"touchPressCount\":" + String(gTouchButton.pressCount()) + ",";
         j += "\"lastTouchGesture\":\"" + String(gLastTouchGesture) + "\",";
         j += "\"pet\":" + petStatusJson() + ",";
+        j += "\"bluetooth\":" + bluetoothStatusJson() + ",";
         j += "\"hardware\":" + hardwareStatusJson() + ",";
         j += "\"screenMode\":\"" + String(screenModeName()) + "\",";
         j += "\"exchange\":" + exchangeStatusJson() + ",";
@@ -1710,6 +1862,15 @@ static void setupWebServer() {
     });
 
 #if defined(GEEKCLOCK_SMALLTV_PRO)
+    server.on("/api/bluetooth", HTTP_GET, []() {
+        addCors();
+        server.send(200, "application/json", bluetoothStatusJson());
+    });
+    server.on("/ble-remote", HTTP_GET, []() {
+        server.sendHeader("Content-Encoding", "gzip");
+        server.sendHeader("Cache-Control", "no-cache");
+        server.send_P(200, "text/html; charset=utf-8", reinterpret_cast<const char*>(BLE_REMOTE_GZIP), sizeof(BLE_REMOTE_GZIP));
+    });
     server.on("/api/pomodoro", HTTP_GET, []() {
         addCors();
         server.send(200, "application/json", pomodoroStatusJson());
@@ -2214,6 +2375,9 @@ void setup() {
         gLastWifiRetryMs = millis();
     }
 
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+    gBleRemote.begin();
+#endif
     setupWebServer();
 
     if (WiFi.status() == WL_CONNECTED
@@ -2237,6 +2401,7 @@ void loop() {
 #endif
 #if defined(GEEKCLOCK_SMALLTV_PRO)
     settleStudy(millis());
+    serviceBleRemote();
     serviceTouchButton();
     static uint32_t studyFrameMs = 0;
     if (gScreenMode == ScreenMode::Pomodoro && uint32_t(millis() - studyFrameMs) >= 250) {
