@@ -1,6 +1,6 @@
-# Chiikawa Standalone Firmware for GeekMagic SmallTV-Ultra (ESP8266)
+# Chiikawa Standalone Firmware for GeekMagic SmallTV Ultra / Pro
 
-맥북이나 로컬 서버가 완전히 꺼져 있어도 **시계 단독으로** 동작하는 커스텀 ESP8266 펌웨어입니다.
+맥북이나 로컬 서버가 완전히 꺼져 있어도 **시계 단독으로** 동작하는 커스텀 펌웨어입니다. SmallTV-Ultra(ESP8266)와 SmallTV-Pro(ESP32)는 각각의 빌드 대상을 사용합니다.
 
 ## 주요 기능
 - **완전 독립형 NTP 시간 동기화**: 공유기 Wi-Fi만 있으면 `time.google.com` (`time.apple.com`, `kr.pool.ntp.org` 백업 및 UDP 차단 환경용 HTTP `Date` 헤더 폴백 내장)에서 한국 표준시(`KST, UTC+9`)를 실시간 동기화합니다.
@@ -20,5 +20,37 @@
 python3 tools/generate_assets.py
 
 # 2. 펌웨어 빌드 (.pio/build/geekmagic_ultra/firmware.bin)
-~/.platformio/penv/bin/pio run
+~/.platformio/penv/bin/pio run -e geekmagic_ultra
 ```
+
+## SmallTV Pro (ESP32, 8 MB) 전용 빌드
+
+firmware 디렉터리에서 PlatformIO로 빌드합니다.
+
+```bash
+pio run -e geekmagic_pro
+```
+
+결과: `.pio/build/geekmagic_pro/firmware.bin` (OTA 앱 전용).
+대상: GeekMagic SmallTV-PRO, ESP32. ESP8266 Ultra / ESP32-C2에 설치하지 마세요.
+화면: ST7789 240×240, SCLK=18, MOSI=23, DC=2, RST=4, CS=GND,
+백라이트=25(active-low), SPI mode 3 / 40 MHz.
+핀 근거: https://github.com/giovi321/smalltv-mod/blob/main/src/board_esp32_pro.h
+
+순정 `/update`의 `firmware` 필드로 앱 파일만 전송합니다.
+기존 부트로더와 파티션 표는 유지하며, 파일시스템을 자동 포맷하지 않습니다.
+빌드 파티션 설정은 장치의 OTA 슬롯 크기를 변경하지 않습니다.
+기존 Wi-Fi NVS 자격 증명을 사용하고, 접속 실패 시 `Chiikawa-Clock` AP를 엽니다.
+설치 후 `/v.json`, `/api/status`, `/update`로 기종·상태·복구 경로를 확인합니다.
+V1.2부터 상단 터치 버튼(GPIO32/T9)을 누를 때마다 치이카와 → 하치와레 → 우사기 → 삼총사 → 치이카와 순서로 전환합니다.
+길게 대고 있어도 한 번만 바뀌며, 손을 뗀 뒤 다시 눌러야 다음 캐릭터로 넘어갑니다.
+마지막 캐릭터 선택은 저장되어 재부팅 후에도 유지됩니다.
+부팅 직후 약 1초는 터치 기준값을 자동 보정하므로 손을 떼어 두세요.
+`/api/status`에 터치 보정·측정값·누름 횟수 진단 정보가 포함됩니다.
+순정 복구에는 Pro용 `FW_SmallTV-PRO_V3.4.88EN.bin`을 사용합니다.
+
+배포 파일: [SmallTV-PRO_Chiikawa_ESP32_V1.2.bin](SmallTV-PRO_Chiikawa_ESP32_V1.2.bin)
+
+무결성 확인: [크기 및 SHA256 manifest](SmallTV-PRO_Chiikawa_ESP32_V1.2.json).
+V1.2는 Pro 기기에 OTA 설치 후 재부팅, Wi-Fi, NTP, 날씨, 웹 설정, 터치 센서 보정을 확인했습니다.
+터치 입력 로직은 호스트 시뮬레이션으로 보정·잡음·디바운스·길게 누르기·재누르기·타이머 순환을 검증했습니다.

@@ -1,3 +1,9 @@
 .pio/
+/.dummy/
+/CMakeLists.txt
+/dependencies.lock
+/managed_components/
+/sdkconfig.defaults
+/sdkconfig.sdclock_c2
 .vscode/
 .DS_Store

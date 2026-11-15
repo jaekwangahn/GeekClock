@@ -1,32 +1,92 @@
 #include <Arduino.h>
+#if defined(ARDUINO_ARCH_ESP32)
+#include <WiFi.h>
+#include <WebServer.h>
+#include <HTTPClient.h>
+#include <Update.h>
+#include <esp_sntp.h>
+#include <Preferences.h>
+#include <esp_ota_ops.h>
+#include <esp_wifi.h>
+#else
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266HTTPUpdateServer.h>
 #include <ESP8266HTTPClient.h>
-#include <FS.h>
-#include <LittleFS.h>
-#include <TFT_eSPI.h>
 #include <TZ.h>
 #include <coredecls.h>
+#endif
+#include <FS.h>
+#include <LittleFS.h>
+#if defined(ARDUINO_ARCH_ESP32)
+#include <Arduino_GFX_Library.h>
+#else
+#include <TFT_eSPI.h>
+#endif
 #include <sys/time.h>
 #include <time.h>
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+#include "touch_button.h"
+#endif
+
+#if defined(CONFIG_IDF_TARGET_ESP32C2) && defined(GEEKCLOCK_XTAL_MHZ)
+static_assert(CONFIG_XTAL_FREQ == GEEKCLOCK_XTAL_MHZ,
+              "ESP32-C2 SDK crystal frequency does not match this board");
+#endif
 
 #include "chiikawa_assets.h"
+#if defined(ARDUINO_ARCH_ESP32)
+#include "web_ui_gzip.h"
+#else
 #include "web_ui.h"
+#endif
 
 // ============================================================================
-// Hardware Configuration (GeekMagic SmallTV / SmallTV-Ultra ESP8266)
+// Hardware Configuration (SmallTV-Ultra, ESP32-C2 SDC2, or ESP32 SmallTV-Pro)
 // ============================================================================
-constexpr uint8_t PIN_BACKLIGHT = 5;  // GPIO5 PWM (Active LOW on SmallTV-Ultra)
+#ifndef GEEKCLOCK_BACKLIGHT_PIN
+#define GEEKCLOCK_BACKLIGHT_PIN 5
+#endif
+#ifndef GEEKCLOCK_BACKLIGHT_INVERT
+#define GEEKCLOCK_BACKLIGHT_INVERT 1
+#endif
+constexpr uint8_t PIN_BACKLIGHT = GEEKCLOCK_BACKLIGHT_PIN;
 constexpr int SCREEN_W = 240;
 constexpr int SCREEN_H = 240;
 constexpr int STRIP_H  = 20;          // 240x20x2 = 9,600 bytes static RAM buffer (12 strips, zero flicker!)
 
+#if defined(ARDUINO_ARCH_ESP32)
+static Arduino_ESP32SPI displayBus(TFT_DC, TFT_CS, TFT_SCLK, TFT_MOSI, GFX_NOT_DEFINED);
+// ips=false makes invertDisplay(true) send INVON, matching TFT_eSPI's semantics.
+static Arduino_ST7789 tft(&displayBus, TFT_RST, 0, false, SCREEN_W, SCREEN_H);
+#else
 static TFT_eSPI tft = TFT_eSPI();
+#endif
 static uint16_t stripBuf[SCREEN_W * STRIP_H];
 
+#if defined(ARDUINO_ARCH_ESP32)
+static WebServer server(80);
+static bool gOtaSucceeded = false;
+static String gOtaError;
+static unsigned long gOtaRebootAtMs = 0;
+#else
 static ESP8266WebServer server(80);
 static ESP8266HTTPUpdateServer httpUpdater;
+#endif
+static bool gFsMounted = false;
+#if defined(CONFIG_IDF_TARGET_ESP32C2)
+static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.1-ESP32C2";
+static constexpr const char* DEVICE_MODEL = "SDC2 (ESP32-C2)";
+#elif defined(GEEKCLOCK_SMALLTV_PRO)
+static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.2-SmallTV-PRO";
+static constexpr const char* DEVICE_MODEL = "GeekMagic SmallTV-PRO";
+#elif defined(ARDUINO_ARCH_ESP32)
+static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.1-ESP32";
+static constexpr const char* DEVICE_MODEL = "ESP32";
+#else
+static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.0";
+static constexpr const char* DEVICE_MODEL = "SmallTV-Ultra";
+#endif
 
 // ============================================================================
 // Persistent Configuration & Live State
@@ -78,6 +138,9 @@ static unsigned long gLastWifiRetryMs = 0;
 static unsigned long gAnimTickMs = 0;
 static uint8_t gAnimFrame = 0;
 static bool gForceRedraw = true;
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+static TouchButton gTouchButton;
+#endif
 
 // ============================================================================
 // Color Themes (Matches chiikawa_art.py 100%)
@@ -680,7 +743,11 @@ static void renderClockScreen() {
         }
 
         // Push 240x30 strip over 40MHz SPI!
+#if defined(ARDUINO_ARCH_ESP32)
+        tft.draw16bitRGBBitmap(0, stripY0, stripBuf, SCREEN_W, STRIP_H);
+#else
         tft.pushImage(0, stripY0, SCREEN_W, STRIP_H, stripBuf);
+#endif
         yield();
     }
 }
@@ -733,7 +800,7 @@ static void setDefaultConfig() {
     gCfg.ddayDate[0]  = '\0';
     gCfg.rotation   = 0;
     gCfg.invertDisp = true;
-    gCfg.blInvert   = true;
+    gCfg.blInvert   = GEEKCLOCK_BACKLIGHT_INVERT != 0;
 }
 
 static bool extractJsonStr(const String& json, const char* key, char* dst, size_t maxLen) {
@@ -790,8 +857,6 @@ static String escapeJson(const char* s) {
 }
 
 static void saveConfigToFS() {
-    File f = LittleFS.open("/chiikawa_cfg.json", "w");
-    if (!f) return;
     String j = "{";
     j += "\"character\":\"" + escapeJson(gCfg.character) + "\",";
     j += "\"theme\":\"" + escapeJson(gCfg.theme) + "\",";
@@ -811,9 +876,51 @@ static void saveConfigToFS() {
     j += "\"invertDisp\":" + String(gCfg.invertDisp ? 1 : 0) + ",";
     j += "\"blInvert\":" + String(gCfg.blInvert ? 1 : 0);
     j += "}";
+#if defined(ARDUINO_ARCH_ESP32)
+    // A dedicated namespace keeps settings persistent without formatting stock FS.
+    if (!gFsMounted) {
+        Preferences prefs;
+        if (prefs.begin("chiikawa", false)) {
+            prefs.putString("config", j);
+            prefs.end();
+        }
+        return;
+    }
+#endif
+    File f = LittleFS.open("/chiikawa_cfg.json", "w");
+    if (!f) return;
     f.print(j);
     f.close();
 }
+
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+static void serviceTouchButton() {
+    static uint32_t lastSampleMs = 0;
+    const uint32_t nowMs = millis();
+    if (uint32_t(nowMs - lastSampleMs) < 20) return;
+    lastSampleMs = nowMs;
+
+    // Median-of-three rejects isolated low-going sensor glitches.
+    const uint16_t a = touchRead(GEEKCLOCK_TOUCH_PIN);
+    const uint16_t b = touchRead(GEEKCLOCK_TOUCH_PIN);
+    const uint16_t c = touchRead(GEEKCLOCK_TOUCH_PIN);
+    const uint16_t raw = max(min(a, b), min(max(a, b), c));
+    if (!gTouchButton.update(raw, nowMs)) return;
+
+    static const char* const characters[] = {"chiikawa", "hachiware", "usagi", "trio"};
+    size_t next = 0;
+    for (size_t i = 0; i < 4; ++i) {
+        if (strcmp(gCfg.character, characters[i]) == 0) {
+            next = (i + 1) % 4;
+            break;
+        }
+    }
+    strcpy(gCfg.character, characters[next]);
+    gAnimFrame = 0;
+    gForceRedraw = true;
+    saveConfigToFS();
+}
+#endif
 
 static void applyJsonToConfig(const String& json) {
     extractJsonStr(json, "character", gCfg.character, sizeof(gCfg.character));
@@ -838,6 +945,19 @@ static void applyJsonToConfig(const String& json) {
 
 static void loadConfigFromFS() {
     setDefaultConfig();
+#if defined(ARDUINO_ARCH_ESP32)
+    if (!gFsMounted) {
+        Preferences prefs;
+        if (prefs.begin("chiikawa", true)) {
+            applyJsonToConfig(prefs.getString("config", "{}"));
+            if (prefs.getBytesLength("message") == MSG_BMP_BYTES) {
+                gHasMsgBmp = prefs.getBytes("message", gMsgBmp, MSG_BMP_BYTES) == MSG_BMP_BYTES;
+            }
+            prefs.end();
+        }
+        return;
+    }
+#endif
     if (LittleFS.exists("/chiikawa_cfg.json")) {
         File f = LittleFS.open("/chiikawa_cfg.json", "r");
         if (f) {
@@ -862,7 +982,11 @@ static void loadConfigFromFS() {
 // ============================================================================
 static void configureNtpSync() {
     const char* primary = (gCfg.ntpServer[0] != '\0') ? gCfg.ntpServer : "time.google.com";
+#if defined(ARDUINO_ARCH_ESP32)
+    configTzTime("KST-9", primary, "time.apple.com", "kr.pool.ntp.org");
+#else
     configTime(TZ_Asia_Seoul, primary, "time.apple.com", "kr.pool.ntp.org");
+#endif
 }
 
 // Fallback parser for HTTP "Date: Wed, 11 Nov 2026 04:45:12 GMT" if router blocks UDP 123
@@ -957,7 +1081,78 @@ static void addCors() {
     server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
+#if defined(ARDUINO_ARCH_ESP32)
+static void handleOtaUpload() {
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+        gOtaSucceeded = false;
+        gOtaError = "";
+        if (gOtaRebootAtMs != 0) {
+            gOtaError = "Firmware restart already pending";
+            return;
+        }
+        // Update writes only the inactive OTA app partition, preserving NVS and files.
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+            gOtaError = Update.errorString();
+        }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+        if (gOtaError.length() == 0 &&
+            Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+            gOtaError = Update.errorString();
+            Update.abort();
+        }
+    } else if (upload.status == UPLOAD_FILE_END) {
+        if (gOtaError.length() != 0) return;
+        if (upload.totalSize == 0) {
+            gOtaError = "Empty firmware upload";
+            Update.abort();
+        } else if (!Update.end(true)) {
+            gOtaError = Update.errorString();
+        } else {
+            gOtaSucceeded = true;
+        }
+    } else if (upload.status == UPLOAD_FILE_ABORTED) {
+        Update.abort();
+        gOtaSucceeded = false;
+        gOtaError = "Firmware upload aborted";
+    }
+}
+
+static void finishOtaUpload() {
+    addCors();
+    server.sendHeader("Connection", "close");
+    if (!gOtaSucceeded || gOtaError.length() != 0) {
+        String error = gOtaError.length() ? gOtaError : String("No firmware file received");
+        server.send(400, "text/plain; charset=utf-8", "Update failed: " + error);
+        return;
+    }
+    server.send(200, "text/plain; charset=utf-8", "OK. Restarting...");
+    // Let WebServer finish its response before restarting, including stock AJAX clients.
+    gOtaRebootAtMs = millis() + 1000;
+}
+
+static void setupEsp32Ota() {
+    auto page = []() {
+        server.send(200, "text/html; charset=utf-8",
+            "<!doctype html><html lang='ko'><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<title>Chiikawa Firmware Update</title><h1>펌웨어 업데이트</h1>"
+            "<p>이 기기 모델에 맞는 앱 펌웨어(.bin)를 선택하세요.</p>"
+            "<form method='POST' action='/update_ota' enctype='multipart/form-data'>"
+            "<input type='file' name='update' accept='.bin' required>"
+            "<button type='submit'>업데이트</button></form></html>");
+    };
+    server.on("/update", HTTP_GET, page);
+    server.on("/update_ota", HTTP_GET, page);
+    server.on("/update", HTTP_POST, finishOtaUpload, handleOtaUpload);
+    server.on("/update_ota", HTTP_POST, finishOtaUpload, handleOtaUpload);
+}
+#endif
+
 static void setupWebServer() {
+#if defined(ARDUINO_ARCH_ESP32)
+    setupEsp32Ota();
+#else
     // Ensure GPIO0 (TFT_DC) & GPIO2 (TFT_RST) are driven HIGH right before any OTA soft-reboot
     // so ESP8266 ROM bootloader always boots cleanly into flash mode without needing USB replug!
     Update.onProgress([](size_t progress, size_t total) {
@@ -969,10 +1164,17 @@ static void setupWebServer() {
 
     // 1. Wireless OTA Firmware Update (/update) — 100% compatible with stock SmallTV-Ultra!
     httpUpdater.setup(&server, "/update");
+#endif
 
     // 2. Built-in Korean Web Dashboard (http://<ip>/)
     server.on("/", HTTP_GET, []() {
+#if defined(ARDUINO_ARCH_ESP32)
+        server.sendHeader("Content-Encoding", "gzip");
+        server.send_P(200, "text/html; charset=utf-8",
+                      reinterpret_cast<const char*>(WEB_INDEX_GZIP), sizeof(WEB_INDEX_GZIP));
+#else
         server.send_P(200, "text/html; charset=utf-8", WEB_INDEX_HTML);
+#endif
     });
 
     // 3. Live JSON Status
@@ -1014,6 +1216,26 @@ static void setupWebServer() {
         j += "\"ddayDate\":\"" + escapeJson(gCfg.ddayDate) + "\",";
         j += "\"rotation\":" + String(gCfg.rotation) + ",";
         j += "\"invertDisp\":" + String(gCfg.invertDisp ? "true" : "false") + ",";
+        j += "\"filesystemReady\":" + String(gFsMounted ? "true" : "false") + ",";
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+        j += "\"touchReady\":" + String(gTouchButton.ready() ? "true" : "false") + ",";
+        j += "\"touchPressed\":" + String(gTouchButton.pressed() ? "true" : "false") + ",";
+        j += "\"touchRaw\":" + String(gTouchButton.raw()) + ",";
+        j += "\"touchBaseline\":" + String(gTouchButton.baseline()) + ",";
+        j += "\"touchPressCount\":" + String(gTouchButton.pressCount()) + ",";
+#endif
+#if defined(ARDUINO_ARCH_ESP32)
+        const esp_partition_t* running = esp_ota_get_running_partition();
+        const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
+        j += "\"version\":\"" + String(FIRMWARE_VERSION) + "\",";
+        j += "\"chipModel\":\"" + String(ESP.getChipModel()) + "\",";
+        j += "\"chipRevision\":" + String(ESP.getChipRevision()) + ",";
+        j += "\"flashSize\":" + String(ESP.getFlashChipSize()) + ",";
+        j += "\"sketchSize\":" + String(ESP.getSketchSize()) + ",";
+        j += "\"runningPartition\":\"" + String(running ? running->label : "") + "\",";
+        j += "\"otaPartition\":\"" + String(next ? next->label : "") + "\",";
+        j += "\"otaSlotBytes\":" + String(next ? next->size : 0) + ",";
+#endif
         j += "\"freeHeap\":" + String(ESP.getFreeHeap());
         j += "}";
         server.send(200, "application/json; charset=utf-8", j);
@@ -1055,11 +1277,33 @@ static void setupWebServer() {
                 gMsgBmp[i] = (hexNib(hex[i * 2]) << 4) | hexNib(hex[i * 2 + 1]);
             }
             gHasMsgBmp = true;
-            File mf = LittleFS.open("/chiikawa_msg.bin", "w");
-            if (mf) { mf.write(gMsgBmp, MSG_BMP_BYTES); mf.close(); }
+#if defined(ARDUINO_ARCH_ESP32)
+            if (!gFsMounted) {
+                Preferences prefs;
+                if (prefs.begin("chiikawa", false)) {
+                    prefs.putBytes("message", gMsgBmp, MSG_BMP_BYTES);
+                    prefs.end();
+                }
+            } else
+#endif
+            {
+                File mf = LittleFS.open("/chiikawa_msg.bin", "w");
+                if (mf) { mf.write(gMsgBmp, MSG_BMP_BYTES); mf.close(); }
+            }
         } else {
             gHasMsgBmp = false;
-            LittleFS.remove("/chiikawa_msg.bin");
+#if defined(ARDUINO_ARCH_ESP32)
+            if (!gFsMounted) {
+                Preferences prefs;
+                if (prefs.begin("chiikawa", false)) {
+                    prefs.remove("message");
+                    prefs.end();
+                }
+            } else
+#endif
+            {
+                LittleFS.remove("/chiikawa_msg.bin");
+            }
         }
         gForceRedraw = true;
         server.send(200, "application/json", "{\"ok\":true}");
@@ -1092,30 +1336,59 @@ static void setupWebServer() {
         server.send(200, "application/json", "{\"ok\":true}");
         delay(250);
         // Save to /wifi.json too so stock SmallTV-Ultra & Chiikawa firmware share Wi-Fi seamlessly!
-        File wf = LittleFS.open("/wifi.json", "w");
-        if (wf) {
-            wf.print(String("{\"a\":\"") + escapeJson(ssid) + "\", \"p\":\"" + escapeJson(pass) + "\"}");
-            wf.close();
+        if (gFsMounted) {
+            File wf = LittleFS.open("/wifi.json", "w");
+            if (wf) {
+                wf.print(String("{\"a\":\"") + escapeJson(ssid) + "\", \"p\":\"" + escapeJson(pass) + "\"}");
+                wf.close();
+            }
         }
+#if defined(ARDUINO_ARCH_ESP32)
+        WiFi.mode(WIFI_STA);
+        // persistent() only affects Wi-Fi initialization on ESP32. Select FLASH
+        // explicitly so recovery credentials survive when stock FS cannot mount.
+        esp_wifi_set_storage(WIFI_STORAGE_FLASH);
+        WiFi.begin(ssid, pass);
+        esp_wifi_set_storage(WIFI_STORAGE_RAM);
+#else
         WiFi.persistent(true);
         WiFi.mode(WIFI_STA);
         WiFi.begin(ssid, pass);
         WiFi.persistent(false);
+#endif
     });
 
     // 8. Stock GeekMagic SmallTV-Ultra Compatible Endpoints (for Studio / Auto-Discovery)
     server.on("/v.json", HTTP_GET, []() {
         addCors();
         server.send(200, "application/json",
-                    "{\"m\":\"SmallTV-Ultra\",\"v\":\"Chiikawa-Standalone-V1.0\",\"standalone\":true}");
+                    String("{\"m\":\"") + DEVICE_MODEL + "\",\"v\":\"" +
+                    FIRMWARE_VERSION + "\",\"standalone\":true}");
     });
+#if defined(ARDUINO_ARCH_ESP32)
+    server.on("/version", HTTP_GET, []() {
+        addCors();
+        server.send(200, "text/plain", FIRMWARE_VERSION);
+    });
+#endif
 
     server.on("/space.json", HTTP_GET, []() {
         addCors();
-        FSInfo info;
-        LittleFS.info(info);
-        String j = "{\"total\":" + String(info.totalBytes) +
-                   ",\"free\":" + String(info.totalBytes - info.usedBytes) + "}";
+        size_t totalBytes = 0, usedBytes = 0;
+        if (gFsMounted) {
+#if defined(ARDUINO_ARCH_ESP32)
+            totalBytes = LittleFS.totalBytes();
+            usedBytes = LittleFS.usedBytes();
+#else
+            FSInfo info;
+            if (LittleFS.info(info)) {
+                totalBytes = info.totalBytes;
+                usedBytes = info.usedBytes;
+            }
+#endif
+        }
+        String j = "{\"total\":" + String(totalBytes) +
+                   ",\"free\":" + String(totalBytes - min(totalBytes, usedBytes)) + "}";
         server.send(200, "application/json", j);
     });
 
@@ -1168,13 +1441,21 @@ static void setupWebServer() {
 // ============================================================================
 void setup() {
     // 1. Backlight PWM setup (avoid full flash during boot)
+#if !defined(ARDUINO_ARCH_ESP32)
     analogWriteRange(255);
     analogWriteFreq(1000);
+#endif
     pinMode(PIN_BACKLIGHT, OUTPUT);
-    analogWrite(PIN_BACKLIGHT, 40); // ~84% bright on active-LOW
+    analogWrite(PIN_BACKLIGHT, GEEKCLOCK_BACKLIGHT_INVERT ? 40 : 215);
 
+#if defined(ARDUINO_ARCH_ESP32)
+    // Preserve stock photo/config files if their filesystem is not LittleFS or
+    // the stock partition layout differs. Network recovery still works via NVS/AP.
+    gFsMounted = LittleFS.begin(false);
+#else
     // 2. Mount LittleFS (auto-migrating /wifi.json from stock GeekMagic SPIFFS on first boot!)
-    if (!LittleFS.begin()) {
+    gFsMounted = LittleFS.begin();
+    if (!gFsMounted) {
         char migSsid[64] = {}, migPass[64] = {};
         #pragma GCC diagnostic push
         #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
@@ -1193,7 +1474,7 @@ void setup() {
         #pragma GCC diagnostic pop
 
         LittleFS.format();
-        LittleFS.begin();
+        gFsMounted = LittleFS.begin();
         if (migSsid[0] != '\0') {
             File lwf = LittleFS.open("/wifi.json", "w");
             if (lwf) {
@@ -1202,15 +1483,25 @@ void setup() {
             }
         }
     }
+#endif
     loadConfigFromFS();
 
     // 3. Initialize 240x240 ST7789 IPS Display (SPI_MODE3 for CS tied to GND!)
+#if defined(ARDUINO_ARCH_ESP32)
+    // Arduino_ST7789 selects SPI_MODE3 on ESP32, including ESP32-C2.
+    tft.begin(SPI_FREQUENCY);
+#else
     tft.init();
     tft.setSwapBytes(true);
+#endif
     applyDisplayHardwareSettings();
 
     // 4. Register SNTP time-sync callback
+#if defined(ARDUINO_ARCH_ESP32)
+    sntp_set_time_sync_notification_cb([](struct timeval*) {
+#else
     settimeofday_cb([]() {
+#endif
         gNtpSynced = true;
         gLastNtpEpoch = time(nullptr);
         gForceRedraw = true;
@@ -1221,13 +1512,23 @@ void setup() {
 
     // 6. Connect to Stored Wi-Fi (supports BOTH ESP8266 SDK sector AND stock SmallTV-Ultra /wifi.json!)
     WiFi.persistent(false);
+#if defined(ARDUINO_ARCH_ESP32)
+    WiFi.setHostname("Chiikawa-Clock");
+#else
     WiFi.hostname("Chiikawa-Clock");
+#endif
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
 
     char savedSsid[64] = {}, savedPass[64] = {};
-    if (LittleFS.exists("/wifi.json")) {
-        File wf = LittleFS.open("/wifi.json", "r");
+    const char* wifiPaths[] = {"/wifi.json"
+#if defined(ARDUINO_ARCH_ESP32)
+        , "/config.json", "/.sys/config.json"
+#endif
+    };
+    for (const char* path : wifiPaths) {
+        if (!gFsMounted || !LittleFS.exists(path)) continue;
+        File wf = LittleFS.open(path, "r");
         if (wf) {
             String wj = wf.readString();
             wf.close();
@@ -1236,8 +1537,10 @@ void setup() {
             if (savedSsid[0] == '\0') {
                 extractJsonStr(wj, "ssid", savedSsid, sizeof(savedSsid));
                 extractJsonStr(wj, "pass", savedPass, sizeof(savedPass));
+                if (savedPass[0] == '\0') extractJsonStr(wj, "password", savedPass, sizeof(savedPass));
             }
         }
+        if (savedSsid[0] != '\0') break;
     }
 
     if (savedSsid[0] != '\0') {
@@ -1276,6 +1579,16 @@ void setup() {
 
 void loop() {
     server.handleClient();
+#if defined(ARDUINO_ARCH_ESP32)
+    if (gOtaRebootAtMs != 0) {
+        if ((int32_t)(millis() - gOtaRebootAtMs) >= 0) ESP.restart();
+        delay(1);
+        return;
+    }
+#endif
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+    serviceTouchButton();
+#endif
     if (WiFi.status() == WL_CONNECTED) {
         if (gApFallbackActive) {
             // Connected to home Wi-Fi! Turn off fallback AP cleanly
@@ -1293,7 +1606,7 @@ void loop() {
             gApFallbackActive = true;
         }
         // Only scan/reconnect if an SSID actually exists; otherwise keep AP channel rock-solid!
-        if (WiFi.SSID().length() > 0 || LittleFS.exists("/wifi.json")) {
+        if (WiFi.SSID().length() > 0 || (gFsMounted && LittleFS.exists("/wifi.json"))) {
             WiFi.reconnect();
         }
     }

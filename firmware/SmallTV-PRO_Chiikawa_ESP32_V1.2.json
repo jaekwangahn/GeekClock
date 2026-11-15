@@ -1,0 +1,16 @@
+{
+  "model": "GeekMagic SmallTV-PRO",
+  "version": "Chiikawa-Standalone-V1.2-SmallTV-PRO",
+  "environment": "geekmagic_pro",
+  "chip": "ESP32",
+  "bytes": 1193792,
+  "sha256": "8d179f46f37a45444906f0ad56afaf9208858a10d259099fb1c399e7523861fc",
+  "touchPin": 32,
+  "characterCycle": [
+    "chiikawa",
+    "hachiware",
+    "usagi",
+    "trio"
+  ],
+  "ota": "application only; preserve existing partitions"
+}
