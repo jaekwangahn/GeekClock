@@ -42,14 +42,27 @@ input[type=range]{flex:1;accent-color:var(--pink);}
 .pet .btn:disabled{opacity:.5;cursor:default;}
 .pet-hint{font-size:12px;line-height:1.7;color:var(--sub);margin:10px 0 0;}
 .pet-feedback{font-size:12px;min-height:18px;margin-top:8px;color:#9d3862;}
-.screen-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin:10px 0;}
+.screen-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;margin:10px 0;}
 .screen-tabs button{border:1.5px solid var(--border);border-radius:12px;background:#fff;color:var(--sub);padding:11px 4px;font-size:13px;font-weight:700;cursor:pointer;}
 .screen-tabs button[aria-pressed=true]{background:var(--soft);border-color:var(--pink);color:#d63c72;}
-.screen-tabs button:disabled,.exchange .btn:disabled,.mario .btn:disabled{opacity:.5;cursor:default;}
+.screen-tabs button:disabled,.exchange .btn:disabled,.mario .btn:disabled,.study .btn:disabled,.room .btn:disabled{opacity:.5;cursor:default;}
 .exchange-rate{font-size:31px;font-weight:800;letter-spacing:-.8px;color:#b9386c;margin:8px 0 2px;font-variant-numeric:tabular-nums;}
 .exchange-unit{font-size:13px;color:var(--sub);font-weight:600;}
 .exchange-info{font-size:12px;line-height:1.8;color:var(--sub);margin:10px 0;}
 .exchange-status{font-size:12px;font-weight:700;color:#846233;min-height:18px;}
+.study-clock{font-size:46px;line-height:1.2;font-weight:800;letter-spacing:-1px;color:#bb4775;text-align:center;font-variant-numeric:tabular-nums;margin:10px 0;}
+.study-phase{text-align:center;font-size:13px;font-weight:700;color:var(--sub);}
+.study-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.study-actions .btn{font-size:13px;padding:11px 6px;}.study-actions .primary{grid-column:1/-1;font-size:15px;}
+.study-config{border:0;padding:0;margin:14px 0 0;min-width:0;}.study-config legend{font-size:12.5px;font-weight:700;color:var(--sub);padding:0;}
+.study-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;}.study-fields label{font-size:11.5px;}.study-fields input{padding:9px 7px;}
+.study-config:disabled{opacity:.65;}.study-summary{font-size:12px;color:var(--sub);line-height:1.7;text-align:center;}
+.room-wallet{font-size:14px;font-weight:800;padding:8px 12px;border-radius:99px;background:#fff4cd;color:#8a6224;white-space:nowrap;}
+.room-slot{border-top:1px solid #f4e2eb;margin-top:14px;padding-top:12px;}.room-slot-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;}
+.room-slot h3{font-size:13px;margin:0;color:var(--sub);}.room-default{border:1px solid var(--border);border-radius:9px;padding:6px 9px;background:#fff;color:#9b5270;font-weight:600;cursor:pointer;}
+.room-default:disabled{opacity:.5;cursor:default;}.room-items{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.room-item{padding:11px;border:1.5px solid #ead5de;border-radius:12px;background:#fff;min-width:0;}.room-item.equipped{border-color:var(--pink);background:var(--soft);}
+.room-item strong{display:block;font-size:13px;}.room-item small{display:block;font-size:11.5px;color:var(--sub);margin-top:5px;}.room-item .btn{font-size:12px;padding:9px 5px;}
 .hardware summary{cursor:pointer;font-weight:700;font-size:14px;color:#d94b7d;}
 .hardware h3{font-size:12.5px;margin:18px 0 8px;color:var(--sub);}
 .hardware a{color:#b74e7c;}
@@ -74,9 +87,36 @@ input[type=range]{flex:1;accent-color:var(--pink);}
     <button type="button" data-screen="pet" aria-pressed="false" onclick="setScreenMode('pet')">다마고치</button>
     <button type="button" data-screen="exchange" aria-pressed="false" onclick="setScreenMode('exchange')">엔화 환율</button>
     <button type="button" data-screen="mario" aria-pressed="false" onclick="setScreenMode('mario')">마리오 시계</button>
+    <button type="button" data-screen="pomodoro" aria-pressed="false" onclick="setScreenMode('pomodoro')">뽀모도로</button>
   </div>
-  <p class="pet-hint">상단 더블 터치: 시계 → 다마고치 → 엔화 환율 → 마리오 시계 → 시계</p>
+  <p class="pet-hint">상단 더블 터치: 시계 → 다마고치 → 엔화 환율 → 마리오 시계 → 뽀모도로 → 시계</p>
   <div class="pet-feedback" id="screenFeedback" role="status" aria-live="polite"></div>
+</section>
+
+<section class="card study" id="pomodoroCard" aria-labelledby="pomodoroHeading" hidden>
+  <h2 id="pomodoroHeading">🍅 치이카와 뽀모도로</h2>
+  <div class="study-phase" id="pomodoroPhase">집중 준비</div>
+  <div class="study-clock" id="pomodoroTime" role="timer" aria-label="남은 시간">25:00</div>
+  <div class="study-summary" id="pomodoroSummary">완료한 집중 시간을 불러오는 중...</div>
+  <div class="study-summary" id="pomodoroReward"></div>
+  <div class="study-actions">
+    <button class="btn primary" type="button" id="pomodoroToggle" onclick="pomodoroAction(pomodoroState&&pomodoroState.running?'pause':'start')">시작</button>
+    <button class="btn sec" type="button" data-pomodoro-command onclick="pomodoroAction('reset')">집중으로 초기화</button>
+    <button class="btn sec" type="button" data-pomodoro-command onclick="pomodoroAction('skip')">보상 없이 건너뛰기</button>
+  </div>
+  <button class="btn sec" type="button" id="pomodoroMode" onclick="setScreenMode('pomodoro')">뽀모도로 화면 보기</button>
+  <fieldset class="study-config" id="pomodoroConfig">
+    <legend>집중 · 휴식 시간 설정</legend>
+    <div class="study-fields">
+      <div><label for="pomodoroFocus">집중 (1~90분)</label><input type="number" id="pomodoroFocus" min="1" max="90" value="25" inputmode="numeric"></div>
+      <div><label for="pomodoroShort">짧은 휴식 (1~30분)</label><input type="number" id="pomodoroShort" min="1" max="30" value="5" inputmode="numeric"></div>
+      <div><label for="pomodoroLong">긴 휴식 (1~60분)</label><input type="number" id="pomodoroLong" min="1" max="60" value="15" inputmode="numeric"></div>
+    </div>
+    <button class="btn sec" type="button" id="pomodoroSave" onclick="pomodoroAction('configure')">시간 설정 저장</button>
+  </fieldset>
+  <div class="pet-hint" id="pomodoroConfigNote">일시정지 중에 시간 설정을 바꿀 수 있어요.</div>
+  <p class="pet-hint">집중 4회마다 긴 휴식 · 완료 후 다음 구간은 직접 시작해 주세요.<br>집중을 끝내면 집 꾸미기 코인을 받아요. 초기화·건너뛰기에는 보상이 없어요.<br>다른 화면에서도 타이머는 계속됩니다. 재부팅하면 저장된 남은 시간에서 일시정지됩니다.<br>상단 한 번 터치: 시작/일시정지 · 길게 터치: 집중으로 초기화</p>
+  <div class="pet-feedback" id="pomodoroFeedback" role="status" aria-live="polite"></div>
 </section>
 
 <section class="card mario" id="marioCard" aria-labelledby="marioHeading" hidden>
@@ -124,8 +164,17 @@ input[type=range]{flex:1;accent-color:var(--pink);}
     <button class="btn sec" type="button" data-pet-care="sleep" onclick="petAction('sleep')" disabled>🌙 쉬게 하기</button>
   </div>
   <div class="pet-hint" id="petNeeds" hidden></div>
-  <p class="pet-hint">상단 더블 터치: 시계 → 다마고치 → 엔화 환율 → 마리오 시계 → 시계<br>게임에서 한 번 터치하면 놀아 주기 · 약 0.9초 누르면 밥 주기</p>
+  <p class="pet-hint">상단 더블 터치: 시계 → 다마고치 → 엔화 환율 → 마리오 시계 → 뽀모도로 → 시계<br>게임에서 한 번 터치하면 놀아 주기 · 약 0.9초 누르면 밥 주기</p>
   <div class="pet-feedback" id="petFeedback" role="status" aria-live="polite"></div>
+</section>
+
+<section class="card room" id="roomCard" aria-labelledby="roomHeading" hidden>
+  <div class="pet-top"><h2 id="roomHeading">🏠 다마고치 집 꾸미기</h2><span class="room-wallet" id="roomCoins">0 코인</span></div>
+  <p class="pet-hint">집중 완료로 모은 꾸미기 코인으로 벽지·러그·침대·장식을 골라 주세요. 구매하면 바로 적용되고, 보유한 아이템은 무료로 다시 적용할 수 있어요.</p>
+  <button class="btn sec" type="button" id="roomMode" onclick="setScreenMode('pet')">꾸민 집 보러 가기</button>
+  <div id="roomCatalog"></div>
+  <p class="pet-hint">처음에는 20코인으로 시작해요. 코인과 구매·적용 상태는 기기에 저장됩니다.</p>
+  <div class="pet-feedback" id="roomFeedback" role="status" aria-live="polite"></div>
 </section>
 
 <div class="card">
@@ -271,6 +320,11 @@ let curChar='chiikawa', brtTimer=null;
 let petState=null, petBusy=false;
 let currentScreenMode=null, screenBusy=false, exchangeState=null, exchangeBusy=false;
 let marioState=null, marioBusy=false;
+let pomodoroState=null, pomodoroBusy=false, pomodoroConfigDirty=false;
+let roomState=null, roomBusy=false, roomCatalogSignature='';
+let statusRequest=null, pomodoroReadBusy=false;
+const SCREEN_MODES=['clock','pet','exchange','mario','pomodoro'];
+
 
 function renderPet(p){
   const card=document.getElementById('petCard');
@@ -299,13 +353,15 @@ function renderPet(p){
 
 function renderScreenMode(mode){
   const card=document.getElementById('screenCard');
-  if(!['clock','pet','exchange','mario'].includes(mode)){card.hidden=true;return;}
+  if(!SCREEN_MODES.includes(mode)){card.hidden=true;return;}
   currentScreenMode=mode; card.hidden=false;
   card.querySelectorAll('[data-screen]').forEach(button=>{
     button.setAttribute('aria-pressed',String(button.dataset.screen===mode));
-    button.disabled=screenBusy||petBusy||marioBusy;
+    button.disabled=screenBusy||petBusy||marioBusy||pomodoroBusy||roomBusy;
   });
   if(marioState) renderMario(marioState);
+  if(pomodoroState) renderPomodoro(pomodoroState);
+  if(roomState) renderRoomMode();
 }
 
 function renderMario(m){
@@ -356,14 +412,26 @@ function renderExchange(e){
   button.textContent=e.loading||exchangeBusy?'환율 조회 중...':'↻ 환율 다시 조회';
 }
 
-async function fetchDeviceExtras(){
-  const response=await fetch('/api/status');
-  if(!response.ok) throw new Error('기기 상태를 확인하지 못했어요.');
-  renderDeviceExtras(await response.json());
+function renderStatusBox(d){
+  document.getElementById('statusBox').innerHTML=
+    `현재 시각: <b>${d.time}</b> (${d.ntpSynced?'NTP 동기화 완료 ✓':'NTP 동기화 대기 중...'})<br>`+
+    `NTP 서버: <b>${d.ntpServer}</b> | IP: <b>${d.ip}</b> | 날씨: <b>${d.city} ${d.temp}°C</b>`;
+}
+
+function fetchDeviceExtras(){
+  if(statusRequest) return statusRequest;
+  statusRequest=(async()=>{
+    const response=await fetch('/api/status');
+    if(!response.ok) throw new Error('기기 상태를 확인하지 못했어요.');
+    const d=await response.json();
+    renderDeviceExtras(d);renderStatusBox(d);
+    return d;
+  })().finally(()=>{statusRequest=null;});
+  return statusRequest;
 }
 
 async function setScreenMode(mode){
-  if(screenBusy||petBusy||marioBusy||!['clock','pet','exchange','mario'].includes(mode)) return;
+  if(screenBusy||petBusy||marioBusy||pomodoroBusy||roomBusy||!SCREEN_MODES.includes(mode)) return;
   screenBusy=true; renderScreenMode(currentScreenMode); if(petState) renderPet(petState);
   const feedback=document.getElementById('screenFeedback');
   feedback.textContent='화면을 전환하고 있어요...';
@@ -371,9 +439,9 @@ async function setScreenMode(mode){
     const response=await fetch('/api/screen',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
     if(!response.ok) throw new Error('화면을 전환하지 못했어요. 다시 시도해 주세요.');
     const result=await response.json();
-    if(!['clock','pet','exchange','mario'].includes(result.mode)) throw new Error('기기 화면 응답을 확인할 수 없어요.');
+    if(!SCREEN_MODES.includes(result.mode)) throw new Error('기기 화면 응답을 확인할 수 없어요.');
     renderScreenMode(result.mode);
-    feedback.textContent={clock:'시계 화면을 표시했어요.',pet:'다마고치 화면을 표시했어요.',exchange:'엔화 환율 화면을 표시했어요.',mario:'마리오 시계 화면을 표시했어요.'}[result.mode];
+    feedback.textContent={clock:'시계 화면을 표시했어요.',pet:'다마고치 화면을 표시했어요.',exchange:'엔화 환율 화면을 표시했어요.',mario:'마리오 시계 화면을 표시했어요.',pomodoro:'치이카와 뽀모도로 화면을 표시했어요.'}[result.mode];
     await fetchDeviceExtras();
   }catch(error){feedback.textContent=error.message||'기기와 연결하지 못했어요.';}
   finally{screenBusy=false;renderScreenMode(currentScreenMode);if(petState)renderPet(petState);}
@@ -398,6 +466,137 @@ async function refreshExchange(){
   }catch(error){feedback.textContent=error.message||'기기와 연결하지 못했어요.';}
   finally{exchangeBusy=false;if(exchangeState)renderExchange(exchangeState);}
 }
+
+function validPomodoro(p){
+  return p&&['focus','short_break','long_break'].includes(p.phase)&&typeof p.running==='boolean'&&Number.isFinite(p.remainingSeconds)&&p.remainingSeconds>=0;
+}
+
+function renderPomodoro(p){
+  const card=document.getElementById('pomodoroCard');
+  if(!validPomodoro(p)){card.hidden=true;pomodoroState=null;return;}
+  const previousCompleted=pomodoroState?pomodoroState.completedFocus:null;
+  pomodoroState=p;card.hidden=false;
+  if(previousCompleted!==null&&p.completedFocus>previousCompleted){
+    document.getElementById('pomodoroFeedback').textContent=p.lastRewardCoins>0?`집중 완료! 꾸미기 코인 ${p.lastRewardCoins}개를 받았어요. 쉬고 나서 다음 구간을 시작해 주세요.`:'집중을 완료했어요! 코인과 완료 기록을 확인하고 쉬어 주세요.';
+  }
+  const names={focus:'집중 시간',short_break:'짧은 휴식',long_break:'긴 휴식'};
+  document.getElementById('pomodoroPhase').textContent=names[p.phase]+(p.running?' · 진행 중':' · 일시정지');
+  const seconds=Math.max(0,Math.ceil(p.remainingSeconds));
+  document.getElementById('pomodoroTime').textContent=String(Math.floor(seconds/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0');
+  document.getElementById('pomodoroSummary').textContent=`집중 완료 ${p.completedFocus}회 · 누적 ${p.totalFocusMinutes}분 · 이번 주기 ${p.cycle}/4`;
+  document.getElementById('pomodoroReward').textContent=`집중 완료 보상: ${p.rewardCoins} 꾸미기 코인`;
+  const button=document.getElementById('pomodoroToggle');
+  button.textContent=p.running?'일시정지':p.phase==='focus'?'집중 시작 / 이어가기':'휴식 시작 / 이어가기';
+  button.disabled=pomodoroBusy||screenBusy;
+  card.querySelectorAll('[data-pomodoro-command]').forEach(b=>b.disabled=pomodoroBusy||screenBusy);
+  document.getElementById('pomodoroMode').disabled=pomodoroBusy||screenBusy||currentScreenMode==='pomodoro';
+  document.getElementById('pomodoroConfig').disabled=p.running||pomodoroBusy;
+  if(!pomodoroConfigDirty){
+    document.getElementById('pomodoroFocus').value=String(p.focusMinutes);
+    document.getElementById('pomodoroShort').value=String(p.shortBreakMinutes);
+    document.getElementById('pomodoroLong').value=String(p.longBreakMinutes);
+  }
+  document.getElementById('pomodoroConfigNote').textContent=p.storageReady===false?'기기 저장소를 사용할 수 없어 기록을 저장하지 못하고 있어요.':pomodoroConfigDirty?'바꾼 시간은 아직 저장하지 않았어요. 일시정지 후 시간 설정 저장을 눌러 주세요.':p.running?'진행 중에는 시간 설정이 잠깁니다. 일시정지 후 바꿀 수 있어요.':'일시정지 중에 시간 설정을 바꿀 수 있어요.';
+}
+
+async function pomodoroAction(action){
+  if(pomodoroBusy||screenBusy||!pomodoroState) return;
+  const payload={action};
+  const feedback=document.getElementById('pomodoroFeedback');
+  if(action==='configure'){
+    const specs=[['focusMinutes','pomodoroFocus',1,90],['shortBreakMinutes','pomodoroShort',1,30],['longBreakMinutes','pomodoroLong',1,60]];
+    for(const [key,id,min,max] of specs){
+      const value=Number(document.getElementById(id).value);
+      if(!Number.isInteger(value)||value<min||value>max){feedback.textContent=`시간은 표시된 범위의 정수로 입력해 주세요 (${min}~${max}분).`;return;}
+      payload[key]=value;
+    }
+  }
+  pomodoroBusy=true;renderPomodoro(pomodoroState);renderScreenMode(currentScreenMode);
+  feedback.textContent='타이머에 반영하고 있어요...';
+  try{
+    const response=await fetch('/api/pomodoro',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    let result=null;try{result=await response.json();}catch(error){}
+    if(!response.ok) throw new Error(result&&typeof result.error==='string'?result.error:'타이머를 바꾸지 못했어요. 일시정지 후 다시 시도해 주세요.');
+    if(!validPomodoro(result)) throw new Error('타이머 응답을 확인할 수 없어요.');
+    if(action==='configure') pomodoroConfigDirty=false;
+    renderPomodoro(result);
+    feedback.textContent={start:'타이머를 시작했어요. 다른 화면에서도 계속됩니다.',pause:'남은 시간을 유지하고 일시정지했어요.',reset:'집중 시간으로 초기화했어요. 보상은 지급되지 않아요.',skip:'다음 구간으로 넘어갔어요. 보상은 지급되지 않아요.',configure:'집중·휴식 시간 설정을 저장했어요.'}[action]||'반영했어요.';
+    await fetchDeviceExtras();
+  }catch(error){feedback.textContent=error.message||'기기와 연결하지 못했어요.';}
+  finally{pomodoroBusy=false;if(pomodoroState)renderPomodoro(pomodoroState);renderScreenMode(currentScreenMode);}
+}
+
+function renderRoomMode(){
+  document.getElementById('roomMode').disabled=roomBusy||screenBusy||currentScreenMode==='pet';
+}
+
+function renderRoom(r){
+  const card=document.getElementById('roomCard');
+  if(!r||!Number.isFinite(r.coins)||!Array.isArray(r.items)){card.hidden=true;roomState=null;return;}
+  roomState=r;card.hidden=false;
+  document.getElementById('roomCoins').textContent=r.coins.toLocaleString('ko-KR')+' 코인';
+  renderRoomMode();
+  const signature=JSON.stringify([r.coins,r.wallpaper,r.rug,r.bed,r.decor,r.items,roomBusy]);
+  if(signature===roomCatalogSignature) return;
+  roomCatalogSignature=signature;
+  const catalog=document.getElementById('roomCatalog');catalog.replaceChildren();
+  [['wallpaper','벽지'],['rug','러그'],['bed','침대'],['decor','장식']].forEach(([slot,label],index)=>{
+    const section=document.createElement('section');section.className='room-slot';
+    const top=document.createElement('div');top.className='room-slot-top';
+    const heading=document.createElement('h3');heading.textContent=label;top.append(heading);
+    const standard=document.createElement('button');standard.type='button';standard.className='room-default';standard.textContent='기본';
+    standard.setAttribute('aria-label',label+' 기본으로 되돌리기');standard.disabled=roomBusy||r[slot]===0;
+    standard.onclick=()=>roomAction('unequip',index);top.append(standard);section.append(top);
+    const items=document.createElement('div');items.className='room-items';
+    r.items.filter(item=>item.slot===slot).forEach(item=>{
+      const tile=document.createElement('div');tile.className='room-item'+(item.equipped?' equipped':'');
+      const name=document.createElement('strong');name.textContent=item.name;tile.append(name);
+      const detail=document.createElement('small');detail.textContent=item.owned?(item.equipped?'적용 중 · 보유 아이템':'보유 아이템 · 무료 적용'):item.price+' 코인';tile.append(detail);
+      const button=document.createElement('button');button.type='button';button.className='btn sec';button.dataset.roomItem=String(item.id);
+      button.textContent=item.equipped?'적용 중':item.owned?'적용하기':r.coins<item.price?'코인 부족':'구매하고 적용';
+      button.disabled=roomBusy||!!item.equipped||(!item.owned&&r.coins<item.price);
+      button.onclick=()=>roomAction(item.owned?'equip':'buy',item.id);tile.append(button);items.append(tile);
+    });
+    section.append(items);catalog.append(section);
+  });
+}
+
+async function roomAction(action,id){
+  if(roomBusy||!roomState) return;
+  const payload=action==='unequip'?{action,slot:Number(id)}:{action,id:Number(id)};
+  roomBusy=true;renderRoom(roomState);renderScreenMode(currentScreenMode);
+  const feedback=document.getElementById('roomFeedback');feedback.textContent='방에 반영하고 있어요...';
+  try{
+    const response=await fetch('/api/room',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    let result=null;try{result=await response.json();}catch(error){}
+    if(!response.ok) throw new Error(result&&typeof result.error==='string'?result.error:'아이템을 적용하지 못했어요. 코인과 보유 상태를 확인해 주세요.');
+    if(!result||!Number.isFinite(result.coins)||!Array.isArray(result.items)) throw new Error('집 꾸미기 응답을 확인할 수 없어요.');
+    renderRoom(result);
+    feedback.textContent={buy:'구매하고 방에 적용했어요!',equip:'보유한 아이템을 방에 적용했어요.',unequip:'기본 모습으로 바꿨어요.'}[action];
+  }catch(error){feedback.textContent=error.message||'기기와 연결하지 못했어요.';}
+  finally{roomBusy=false;if(roomState)renderRoom(roomState);renderScreenMode(currentScreenMode);}
+}
+
+async function pollPomodoro(){
+  if(pomodoroReadBusy||statusRequest||pomodoroBusy||screenBusy||!pomodoroState||(!pomodoroState.running&&currentScreenMode!=='pomodoro')) return;
+  pomodoroReadBusy=true;
+  try{
+    const response=await fetch('/api/pomodoro');
+    if(!response.ok) return;
+    const result=await response.json();
+    if(!validPomodoro(result)) return;
+    const previous=pomodoroState.completedFocus;
+    renderPomodoro(result);
+    if(result.completedFocus!==previous) await fetchDeviceExtras();
+  }catch(error){}
+  finally{pomodoroReadBusy=false;}
+}
+
+['pomodoroFocus','pomodoroShort','pomodoroLong'].forEach(id=>{
+  document.getElementById(id).addEventListener('input',()=>{
+    pomodoroConfigDirty=true;if(pomodoroState)renderPomodoro(pomodoroState);
+  });
+});
 
 function hardwareBytes(value){
   const n=Number(value);
@@ -473,11 +672,13 @@ function renderDeviceExtras(d){
   if(!petBusy) renderPet(d.pet);
   if(!screenBusy) renderScreenMode(d.screenMode);
   if(!exchangeBusy) renderExchange(d.exchange);
+  if(!pomodoroBusy) renderPomodoro(d.pomodoro);
+  if(!roomBusy) renderRoom(d.room);
   if(d.version) document.getElementById('firmwareVersion').textContent=d.version;
 }
 
 async function petAction(action){
-  if(petBusy || screenBusy || marioBusy || !petState) return;
+  if(petBusy || screenBusy || marioBusy || pomodoroBusy || roomBusy || !petState) return;
   petBusy=true; renderPet(petState); renderScreenMode(currentScreenMode);
   const feedback=document.getElementById('petFeedback');
   feedback.textContent='치이카와에게 전하고 있어요...';
@@ -571,13 +772,7 @@ function renderMsgBitmapHex(text){
 
 async function loadState(){
   try{
-    const r=await fetch('/api/status');
-    if(!r.ok) throw new Error('기기 상태를 불러오지 못했어요.');
-    const d=await r.json();
-    renderDeviceExtras(d);
-    document.getElementById('statusBox').innerHTML=
-      `현재 시각: <b>${d.time}</b> (${d.ntpSynced?'NTP 동기화 완료 ✓':'NTP 동기화 대기 중...'})<br>`+
-      `NTP 서버: <b>${d.ntpServer}</b> | IP: <b>${d.ip}</b> | 날씨: <b>${d.city} ${d.temp}°C</b>`;
+    const d=await fetchDeviceExtras();
     curChar=d.character||'chiikawa';
     document.querySelectorAll('#charChips .chip').forEach(c=>c.classList.toggle('active',c.dataset.v===curChar));
     document.getElementById('theme').value=d.theme||'pink';
@@ -665,17 +860,12 @@ async function saveWifi(){
 }
 
 loadState();
-setInterval(async()=>{
-  try{
-    const r=await fetch('/api/status');
-    if(!r.ok) throw new Error('기기 상태를 불러오지 못했어요.');
-    const d=await r.json();
-    renderDeviceExtras(d);
-    document.getElementById('statusBox').innerHTML=
-      `현재 시각: <b>${d.time}</b> (${d.ntpSynced?'NTP 동기화 완료 ✓':'NTP 동기화 대기 중...'})<br>`+
-      `NTP 서버: <b>${d.ntpServer}</b> | IP: <b>${d.ip}</b> | 날씨: <b>${d.city} ${d.temp}°C</b>`;
-  }catch(e){}
-}, 5000);
+let devicePollTick=0;
+setInterval(()=>{
+  if(statusRequest||pomodoroReadBusy||pomodoroBusy||roomBusy||screenBusy||petBusy||marioBusy) return;
+  if(++devicePollTick%5===0) fetchDeviceExtras().catch(()=>{});
+  else pollPomodoro();
+},1000);
 </script>
 </body>
 </html>

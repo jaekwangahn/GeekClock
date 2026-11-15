@@ -1,0 +1,28 @@
+{
+  "model": "GeekMagic SmallTV-PRO",
+  "version": "Chiikawa-Standalone-V1.8-SmallTV-PRO",
+  "environment": "geekmagic_pro",
+  "chip": "ESP32",
+  "bytes": 1459344,
+  "sha256": "759e171b9d185605fb135bfb76b78b61eb80bbac0dc786eecca939fefa30cee7",
+  "touchPin": 32,
+  "gestures": {
+    "single": "clock character / pet play / exchange refresh / Mario jump / pomodoro start-pause",
+    "double": "cycle five screens",
+    "long900ms": "pet feed / exchange or Mario to clock / pomodoro reset"
+  },
+  "pet": "roaming, needs, feed, play, sleep, XP, persistent state",
+  "ota": "application only; preserve existing partitions",
+  "hardware": "Live chip/CPU/flash/heap/PSRAM/OTA telemetry; board and manufacturer specs labeled separately",
+  "exchange": "100 JPY in KRW; ECB via Frankfurter; verified HTTPS, asynchronous refresh, persistent cache",
+  "screenCycle": [
+    "clock",
+    "pet",
+    "exchange",
+    "mario",
+    "pomodoro"
+  ],
+  "mario": "NES VS.SuperMario title artwork, fixed blue sky and orange sign; KST time/date, seconds, 12/24h, walking and touch jump",
+  "pomodoro": "25/5/15 configurable,4focus longbreak, pause/resume/skip, atomic coin rewards, checkpoint restores paused",
+  "room": "8 purchasable wallpaper/rug/bed/decor items, owned inventory, free re-equip, persistent virtual coins"
+}

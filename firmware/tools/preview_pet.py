@@ -148,14 +148,22 @@ def main() -> None:
     source = (FIRMWARE / "src" / "main.cpp").read_text(encoding="utf-8")
     helpers = source[source.index("struct ThemePalette {"):source.index("static void blitRleStreamStrip(")]
     renderer = (FIRMWARE / "src" / "pet_renderer.h").read_text(encoding="utf-8")
-    check_glyph_coverage(renderer, (FIRMWARE / "src" / "pet_assets.h").read_text(encoding="utf-8"))
+    study_assets = (FIRMWARE / "src" / "study_assets.h").read_text(encoding="utf-8")
+    pet_labels = renderer
+    # Room labels use the study font, while pet dialogue keeps its own font.
+    for size, literal in re.findall(r'FONT_STUDY_(10|13),\s*"([^"\n]*)"', renderer):
+        glyphs = re.search(rf'FONT_STUDY_{size}_GLYPHS\[\d+\].*?=\s*\{{(.*?)\}};', study_assets, re.S)
+        codes = {int(value) for value in re.findall(r'\{\s*(\d+),', glyphs.group(1))}
+        assert not {ord(ch) for ch in literal} - codes, (size, literal)
+        pet_labels = pet_labels.replace('"' + literal + '"', '""')
+    check_glyph_coverage(pet_labels, (FIRMWARE / "src" / "pet_assets.h").read_text(encoding="utf-8"))
     with tempfile.TemporaryDirectory(prefix="geekmagic-pet-render-") as folder:
         temp = Path(folder)
         (temp / "Arduino.h").write_text(ARDUINO_STUB)
         (temp / "pgmspace.h").write_text(PGMSPACE_STUB)
-        includes = "\n".join(f'#include "{FIRMWARE / "src" / name}"' for name in ["chiikawa_assets.h", "pet_assets.h", "pet_game.h"])
-        render_include = f'\n#include "{FIRMWARE / "src" / "pet_renderer.h"}"\n'
-        code = HOST_PRELUDE + includes + "\nstatic PetGame gPetGame;\n" + helpers + render_include + HOST_MAIN
+        includes = "\n".join(f'#include "{FIRMWARE / "src" / name}"' for name in ["chiikawa_assets.h", "pet_assets.h", "study_assets.h", "pet_game.h", "room_decor.h"])
+        render_include = "\n".join(f'#include "{FIRMWARE / "src" / name}"' for name in ["room_renderer.h", "pet_renderer.h"])
+        code = HOST_PRELUDE + includes + "\nstatic PetGame gPetGame;\nstatic RoomDecor gRoom;\n" + helpers + render_include + HOST_MAIN
         (temp / "preview.cpp").write_text(code)
         subprocess.run([compiler, "-std=c++17", "-O1", "-g", "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-I", str(temp), str(temp / "preview.cpp"), "-o", str(temp / "preview")], check=True)
         subprocess.run([str(temp / "preview"), str(args.output.resolve())], check=True)

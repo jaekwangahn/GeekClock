@@ -30,6 +30,8 @@
 #include "touch_button.h"
 #include "touch_gestures.h"
 #include "pet_game.h"
+#include "pomodoro.h"
+#include "room_decor.h"
 #include "exchange_rate.h"
 #endif
 
@@ -41,6 +43,7 @@ static_assert(CONFIG_XTAL_FREQ == GEEKCLOCK_XTAL_MHZ,
 #include "chiikawa_assets.h"
 #if defined(GEEKCLOCK_SMALLTV_PRO)
 #include "pet_assets.h"
+#include "study_assets.h"
 #include "exchange_assets.h"
 #include "mario_assets.h"
 #include "mario_title_assets.h"
@@ -88,7 +91,7 @@ static bool gFsMounted = false;
 static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.1-ESP32C2";
 static constexpr const char* DEVICE_MODEL = "SDC2 (ESP32-C2)";
 #elif defined(GEEKCLOCK_SMALLTV_PRO)
-static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.7-SmallTV-PRO";
+static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.8-SmallTV-PRO";
 static constexpr const char* DEVICE_MODEL = "GeekMagic SmallTV-PRO";
 #elif defined(ARDUINO_ARCH_ESP32)
 static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.1-ESP32";
@@ -152,7 +155,14 @@ static bool gForceRedraw = true;
 static TouchButton gTouchButton;
 static TouchGestures gTouchGestures;
 static PetGame gPetGame;
-enum class ScreenMode : uint8_t { Clock, Pet, Exchange, Mario };
+static PomodoroTimer gPomodoro;
+static RoomDecor gRoom;
+static uint16_t gStudyRewardCoins = 0;
+static uint32_t gStudyRewardAtMs = 0;
+static uint32_t gStudyLastSaveMs = 0;
+static bool gStudyStorageOk = true;
+static bool gStudyDirty = false;
+enum class ScreenMode : uint8_t { Clock, Pet, Exchange, Mario, Pomodoro };
 static ScreenMode gScreenMode = ScreenMode::Clock;
 static ExchangeRateClient gExchange;
 struct ExchangeView {
@@ -817,13 +827,16 @@ static void renderClockScreen() {
 
 // ============================================================================
 #if defined(GEEKCLOCK_SMALLTV_PRO)
+#include "room_renderer.h"
 #include "pet_renderer.h"
+#include "study_renderer.h"
 #include "exchange_renderer.h"
 #include "mario_renderer.h"
 #endif
 
 static void renderCurrentScreen() {
 #if defined(GEEKCLOCK_SMALLTV_PRO)
+    if (gScreenMode == ScreenMode::Pomodoro) { renderPomodoroScreen(); return; }
     if (gScreenMode == ScreenMode::Mario) { updateMarioView(); renderMarioScreen(); return; }
     if (gScreenMode == ScreenMode::Exchange) { renderExchangeScreen(); return; }
     if (gScreenMode == ScreenMode::Pet) { renderPetScreen(); return; }
@@ -1002,10 +1015,157 @@ static void loadPetState() {
     gPetLastSaveMs = millis();
 }
 
+// Integer fields for the study/shop API must be actual complete JSON numbers.
+static bool studyJsonInt(const String& json, const char* key, int& value) {
+    const String needle = String("\"") + key + "\"";
+    int at = json.indexOf(needle);
+    if (at < 0) return false;
+    at += needle.length();
+    auto whitespace = [&]() {
+        while (at < int(json.length()) && (json[at] == ' ' || json[at] == '\t' || json[at] == '\r' || json[at] == '\n')) ++at;
+    };
+    whitespace();
+    if (at >= int(json.length()) || json[at++] != ':') return false;
+    whitespace();
+    bool negative = at < int(json.length()) && json[at] == '-';
+    if (negative) ++at;
+    if (at >= int(json.length()) || json[at] < '0' || json[at] > '9') return false;
+    if (json[at] == '0' && at + 1 < int(json.length()) && json[at + 1] >= '0' && json[at + 1] <= '9') return false;
+    int64_t number = 0;
+    while (at < int(json.length()) && json[at] >= '0' && json[at] <= '9') {
+        number = number * 10 + json[at++] - '0';
+        if (number > 2147483647LL) return false;
+    }
+    whitespace();
+    if (at >= int(json.length()) || (json[at] != ',' && json[at] != '}')) return false;
+    value = negative ? -int(number) : int(number);
+    return true;
+}
+
+static bool saveStudyState() {
+    // One NVS record commits the timer transition and coin wallet together.
+    String record;
+    record.reserve(350);
+    record = "{\"schema\":1,\"coins\":" + String(gRoom.data.coins);
+    record += ",\"owned\":" + String(gRoom.data.ownedMask);
+    record += ",\"wall\":" + String(gRoom.data.wallpaper) + ",\"rug\":" + String(gRoom.data.rug);
+    record += ",\"bed\":" + String(gRoom.data.bed) + ",\"decor\":" + String(gRoom.data.decor);
+    record += ",\"focus\":" + String(gPomodoro.data.focusMinutes);
+    record += ",\"short\":" + String(gPomodoro.data.shortBreakMinutes);
+    record += ",\"long\":" + String(gPomodoro.data.longBreakMinutes);
+    record += ",\"phase\":" + String(gPomodoro.data.phase) + ",\"cycle\":" + String(gPomodoro.data.cycle);
+    record += ",\"remaining\":" + String(gPomodoro.data.remainingMs);
+    record += ",\"sessions\":" + String(gPomodoro.data.completedFocus);
+    record += ",\"minutes\":" + String(gPomodoro.data.totalFocusMinutes) + "}";
+    Preferences prefs;
+    bool ok = false;
+    if (prefs.begin("chiistudy", false)) {
+        ok = prefs.putString("record", record) == record.length();
+        prefs.end();
+    }
+    gStudyStorageOk = ok;
+    gStudyDirty = !ok;
+    gStudyLastSaveMs = millis();
+    return ok;
+}
+
+static void loadStudyState() {
+    Preferences prefs;
+    String record;
+    if (prefs.begin("chiistudy", true)) {
+        record = prefs.getString("record", "");
+        prefs.end();
+    }
+    RoomData room;
+    PomodoroData timer;
+    auto read = [&](const char* key, int low, int high, auto& target) {
+        int value = 0;
+        if (!studyJsonInt(record, key, value) || value < low || value > high) return false;
+        target = value;
+        return true;
+    };
+    int schema = 0;
+    const bool valid = read("schema", 1, 1, schema) && read("coins", 0, 99999, room.coins) &&
+        read("owned", 0, 255, room.ownedMask) && read("wall", 0, 8, room.wallpaper) &&
+        read("rug", 0, 8, room.rug) && read("bed", 0, 8, room.bed) && read("decor", 0, 8, room.decor) &&
+        read("focus", 1, 90, timer.focusMinutes) && read("short", 1, 30, timer.shortBreakMinutes) &&
+        read("long", 1, 60, timer.longBreakMinutes) && read("phase", 0, 2, timer.phase) &&
+        read("cycle", 0, 3, timer.cycle) && read("remaining", 1, 5400000, timer.remainingMs) &&
+        read("sessions", 0, 1000000000, timer.completedFocus) && read("minutes", 0, 2000000000, timer.totalFocusMinutes);
+    if (valid) { gRoom.data = room; gPomodoro.data = timer; }
+    gRoom.sanitize();
+    gPomodoro.restore();  // Resume paused; powered-off time never earns coins.
+    gStudyLastSaveMs = millis();
+    if (!valid) saveStudyState();
+}
+
+static void settleStudy(uint32_t nowMs) {
+    const PomodoroEvent event = gPomodoro.tick(nowMs);
+    if (event == PomodoroEvent::None) return;
+    if (event == PomodoroEvent::FocusComplete) {
+        gStudyRewardCoins = uint16_t(focusRewardCoins(gPomodoro.lastCompletedFocusMinutes()));
+        gStudyRewardAtMs = nowMs;
+        gRoom.credit(gStudyRewardCoins);
+    }
+    saveStudyState();
+    gForceRedraw = true;
+}
+
+static void togglePomodoro(uint32_t nowMs) {
+    settleStudy(nowMs);
+    if (gPomodoro.data.running) gPomodoro.pause(nowMs);
+    else gPomodoro.start(nowMs);
+    gStudyRewardCoins = 0;
+    settleStudy(nowMs);
+    saveStudyState();
+    gForceRedraw = true;
+}
+
+static String pomodoroStatusJson() {
+    settleStudy(millis());
+    String j = "{\"phase\":\"" + String(gPomodoro.phaseName()) + "\"";
+    j += ",\"running\":" + String(gPomodoro.data.running ? "true" : "false");
+    j += ",\"remainingSeconds\":" + String((gPomodoro.data.remainingMs + 999) / 1000);
+    j += ",\"focusMinutes\":" + String(gPomodoro.data.focusMinutes);
+    j += ",\"shortBreakMinutes\":" + String(gPomodoro.data.shortBreakMinutes);
+    j += ",\"longBreakMinutes\":" + String(gPomodoro.data.longBreakMinutes);
+    j += ",\"completedFocus\":" + String(gPomodoro.data.completedFocus);
+    j += ",\"totalFocusMinutes\":" + String(gPomodoro.data.totalFocusMinutes);
+    j += ",\"cycle\":" + String(gPomodoro.data.cycle);
+    j += ",\"rewardCoins\":" + String(focusRewardCoins(gPomodoro.data.focusMinutes));
+    j += ",\"lastRewardCoins\":" + String(gStudyRewardCoins && uint32_t(millis() - gStudyRewardAtMs) < 8000 ? gStudyRewardCoins : 0);
+    j += ",\"storageReady\":" + String(gStudyStorageOk ? "true" : "false") + "}";
+    return j;
+}
+
+static String roomStatusJson() {
+    settleStudy(millis());
+    String j;
+    j.reserve(1500);
+    j = "{\"coins\":" + String(gRoom.data.coins);
+    j += ",\"wallpaper\":" + String(gRoom.data.wallpaper) + ",\"rug\":" + String(gRoom.data.rug);
+    j += ",\"bed\":" + String(gRoom.data.bed) + ",\"decor\":" + String(gRoom.data.decor);
+    j += ",\"items\":[";
+    static const char* slots[] = {"wallpaper", "rug", "bed", "decor"};
+    const uint8_t equipped[] = {gRoom.data.wallpaper, gRoom.data.rug, gRoom.data.bed, gRoom.data.decor};
+    for (size_t i = 0; i < 8; ++i) {
+        const RoomItem& item = ROOM_ITEMS[i];
+        if (i) j += ',';
+        j += "{\"id\":" + String(item.id) + ",\"slot\":\"" + slots[item.slot] + "\"";
+        j += ",\"key\":\"" + String(item.key) + "\",\"name\":\"" + escapeJson(item.name) + "\"";
+        j += ",\"price\":" + String(item.price);
+        j += ",\"owned\":" + String(gRoom.owns(item.id) ? "true" : "false");
+        j += ",\"equipped\":" + String(equipped[item.slot] == item.id ? "true" : "false") + '}';
+    }
+    j += "]}";
+    return j;
+}
+
 static const char* screenModeName() {
     return gScreenMode == ScreenMode::Pet ? "pet" :
            gScreenMode == ScreenMode::Exchange ? "exchange" :
-           gScreenMode == ScreenMode::Mario ? "mario" : "clock";
+           gScreenMode == ScreenMode::Mario ? "mario" :
+           gScreenMode == ScreenMode::Pomodoro ? "pomodoro" : "clock";
 }
 
 static void updateExchangeView() {
@@ -1038,7 +1198,7 @@ static void loadScreenState() {
     Preferences prefs;
     if (prefs.begin("chiiscreen", true)) {
         uint8_t mode = prefs.getUChar("mode", uint8_t(gScreenMode));
-        if (mode <= uint8_t(ScreenMode::Mario)) gScreenMode = ScreenMode(mode);
+        if (mode <= uint8_t(ScreenMode::Pomodoro)) gScreenMode = ScreenMode(mode);
         prefs.end();
     }
     gPetGame.active = gScreenMode == ScreenMode::Pet;
@@ -1109,10 +1269,12 @@ static void serviceTouchButton() {
     const Gesture gesture = gTouchGestures.update(gTouchButton.pressed(), nowMs);
     if (gesture == Gesture::Double) {
         gLastTouchGesture = "double";
-        setScreenMode(ScreenMode((uint8_t(gScreenMode) + 1) % 4));
+        setScreenMode(ScreenMode((uint8_t(gScreenMode) + 1) % 5));
     } else if (gesture == Gesture::Single) {
         gLastTouchGesture = "single";
-        if (gPetGame.active) {
+        if (gScreenMode == ScreenMode::Pomodoro) {
+            togglePomodoro(nowMs);
+        } else if (gPetGame.active) {
             if (gPetGame.play(nowMs)) { savePetState(); gForceRedraw = true; }
         } else if (gScreenMode == ScreenMode::Mario) {
             triggerMarioJump();
@@ -1124,7 +1286,13 @@ static void serviceTouchButton() {
         }
     } else if (gesture == Gesture::Long) {
         gLastTouchGesture = "long";
-        if (gScreenMode == ScreenMode::Exchange || gScreenMode == ScreenMode::Mario) {
+        if (gScreenMode == ScreenMode::Pomodoro) {
+            settleStudy(nowMs);
+            gPomodoro.reset(nowMs);
+            gStudyRewardCoins = 0;
+            saveStudyState();
+            gForceRedraw = true;
+        } else if (gScreenMode == ScreenMode::Exchange || gScreenMode == ScreenMode::Mario) {
             setScreenMode(ScreenMode::Clock);
         } else if (gPetGame.active && gPetGame.feed(nowMs)) {
             savePetState();
@@ -1521,6 +1689,8 @@ static void setupWebServer() {
         j += "\"screenMode\":\"" + String(screenModeName()) + "\",";
         j += "\"exchange\":" + exchangeStatusJson() + ",";
         j += "\"mario\":" + marioStatusJson() + ",";
+        j += "\"pomodoro\":" + pomodoroStatusJson() + ",";
+        j += "\"room\":" + roomStatusJson() + ",";
 #endif
 #if defined(ARDUINO_ARCH_ESP32)
         const esp_partition_t* running = esp_ota_get_running_partition();
@@ -1540,6 +1710,88 @@ static void setupWebServer() {
     });
 
 #if defined(GEEKCLOCK_SMALLTV_PRO)
+    server.on("/api/pomodoro", HTTP_GET, []() {
+        addCors();
+        server.send(200, "application/json", pomodoroStatusJson());
+    });
+    server.on("/api/pomodoro", HTTP_POST, []() {
+        addCors();
+        const uint32_t nowMs = millis();
+        settleStudy(nowMs);
+        const PomodoroData before = gPomodoro.data;
+        const String body = server.arg("plain");
+        char action[20] = {};
+        extractJsonStr(body, "action", action, sizeof(action));
+        bool accepted = false;
+        if (strcmp(action, "start") == 0) accepted = gPomodoro.start(nowMs);
+        else if (strcmp(action, "pause") == 0) accepted = gPomodoro.pause(nowMs);
+        else if (strcmp(action, "reset") == 0) accepted = gPomodoro.reset(nowMs);
+        else if (strcmp(action, "skip") == 0) accepted = gPomodoro.skip(nowMs);
+        else if (strcmp(action, "configure") == 0) {
+            int focus = 0, shortBreak = 0, longBreak = 0;
+            if (!studyJsonInt(body, "focusMinutes", focus) || !studyJsonInt(body, "shortBreakMinutes", shortBreak) ||
+                !studyJsonInt(body, "longBreakMinutes", longBreak) || focus < 1 || focus > 90 ||
+                shortBreak < 1 || shortBreak > 30 || longBreak < 1 || longBreak > 60) {
+                server.send(400, "application/json", "{\"error\":\"집중 1~90분, 짧은 휴식 1~30분, 긴 휴식 1~60분으로 입력해 주세요.\"}");
+                return;
+            }
+            accepted = gPomodoro.configure(focus, shortBreak, longBreak, nowMs);
+        } else {
+            server.send(400, "application/json", "{\"error\":\"알 수 없는 타이머 동작입니다.\"}");
+            return;
+        }
+        if (!accepted) {
+            server.send(409, "application/json", "{\"error\":\"현재 상태에서는 변경할 수 없어요. 진행 중이라면 먼저 일시정지해 주세요.\"}");
+            return;
+        }
+        gStudyRewardCoins = 0;
+        settleStudy(nowMs);
+        if (!saveStudyState()) {
+            gPomodoro.data = before;
+            gPomodoro.restore();
+            if (before.running) gPomodoro.start(nowMs);
+            server.send(503, "application/json", "{\"error\":\"저장하지 못해 타이머 변경을 취소했어요. 다시 시도해 주세요.\"}");
+            return;
+        }
+        gForceRedraw = true;
+        server.send(200, "application/json", pomodoroStatusJson());
+    });
+    server.on("/api/room", HTTP_GET, []() {
+        addCors();
+        server.send(200, "application/json", roomStatusJson());
+    });
+    server.on("/api/room", HTTP_POST, []() {
+        addCors();
+        settleStudy(millis());
+        const RoomData before = gRoom.data;
+        const String body = server.arg("plain");
+        char action[20] = {};
+        extractJsonStr(body, "action", action, sizeof(action));
+        RoomResult result = RoomResult::InvalidItem;
+        int value = 0;
+        if (strcmp(action, "buy") == 0 || strcmp(action, "equip") == 0) {
+            if (studyJsonInt(body, "id", value) && value >= 1 && value <= 8)
+                result = strcmp(action, "buy") == 0 ? gRoom.buy(uint8_t(value)) : gRoom.equip(uint8_t(value));
+        } else if (strcmp(action, "unequip") == 0) {
+            if (studyJsonInt(body, "slot", value) && value >= 0 && value <= 3)
+                result = gRoom.unequip(uint8_t(value));
+        }
+        if (result != RoomResult::Ok) {
+            const char* error = result == RoomResult::AlreadyOwned ? "이미 보유한 아이템이에요. 적용 버튼을 눌러 주세요." :
+                                result == RoomResult::InsufficientCoins ? "꾸미기 코인이 부족해요. 집중 시간을 완료해 모아 주세요." :
+                                result == RoomResult::NotOwned ? "먼저 구매해야 적용할 수 있어요." : "아이템 또는 슬롯을 확인해 주세요.";
+            server.send(result == RoomResult::InvalidItem ? 400 : 409, "application/json",
+                        "{\"error\":\"" + escapeJson(error) + "\"}");
+            return;
+        }
+        if (!saveStudyState()) {
+            gRoom.data = before;
+            server.send(503, "application/json", "{\"error\":\"저장하지 못해 꾸미기 변경을 취소했어요. 다시 시도해 주세요.\"}");
+            return;
+        }
+        gForceRedraw = true;
+        server.send(200, "application/json", roomStatusJson());
+    });
     server.on("/api/screen", HTTP_POST, []() {
         addCors();
         char mode[16] = {};
@@ -1548,6 +1800,7 @@ static void setupWebServer() {
         else if (strcmp(mode, "pet") == 0) setScreenMode(ScreenMode::Pet);
         else if (strcmp(mode, "exchange") == 0) setScreenMode(ScreenMode::Exchange);
         else if (strcmp(mode, "mario") == 0) setScreenMode(ScreenMode::Mario);
+        else if (strcmp(mode, "pomodoro") == 0) setScreenMode(ScreenMode::Pomodoro);
         else {
             server.send(400, "application/json", "{\"error\":\"Unknown screen mode\"}");
             return;
@@ -1874,6 +2127,7 @@ void setup() {
     loadConfigFromFS();
 #if defined(GEEKCLOCK_SMALLTV_PRO)
     loadPetState();
+    loadStudyState();
     loadScreenState();
 #endif
 
@@ -1982,7 +2236,15 @@ void loop() {
     }
 #endif
 #if defined(GEEKCLOCK_SMALLTV_PRO)
+    settleStudy(millis());
     serviceTouchButton();
+    static uint32_t studyFrameMs = 0;
+    if (gScreenMode == ScreenMode::Pomodoro && uint32_t(millis() - studyFrameMs) >= 250) {
+        studyFrameMs = millis();
+        gForceRedraw = true;
+    }
+    if ((gPomodoro.data.running && uint32_t(millis() - gStudyLastSaveMs) >= 30000) ||
+        (gStudyDirty && uint32_t(millis() - gStudyLastSaveMs) >= 5000)) saveStudyState();
     static uint32_t marioFrameMs = 0;
     if (gScreenMode == ScreenMode::Mario && uint32_t(millis() - marioFrameMs) >= 100) {
         marioFrameMs = millis();

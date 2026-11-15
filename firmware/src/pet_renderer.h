@@ -20,6 +20,36 @@ static void petHeartStrip(int stripY0, int x, int y, uint16_t color) {
             if (rows[yy] & (1 << (6 - xx))) putStripPx(x + xx, y + yy, stripY0, color);
 }
 
+// A single decoded frame is shared by pet and Pomodoro screens.
+static const uint8_t* petSpritePixels(const SpriteFrameRLE* table, uint8_t frame) {
+    static uint8_t pixels[CHAR_CHIIKAWA_W * CHAR_CHIIKAWA_H];
+    static const SpriteFrameRLE* cachedTable = nullptr;
+    static uint8_t cachedFrame = 255;
+    if (cachedTable != table || cachedFrame != frame) {
+        RleStream stream;
+        stream.init(table, frame);
+        for (size_t i = 0; i < sizeof(pixels); ++i) pixels[i] = stream.nextPixel();
+        cachedTable = table;
+        cachedFrame = frame;
+    }
+    return pixels;
+}
+
+static void petCharacterStrip(int stripY0, const uint8_t* pixels, int x, int y,
+                              int width, int height, bool flip = false) {
+    for (int yy = max(y, stripY0); yy <= min(y + height - 1, stripY0 + STRIP_H - 1); ++yy) {
+        const int sourceY = (yy - y) * CHAR_CHIIKAWA_H / height;
+        for (int xx = 0; xx < width; ++xx) {
+            int sourceX = xx * CHAR_CHIIKAWA_W / width;
+            if (flip) sourceX = CHAR_CHIIKAWA_W - 1 - sourceX;
+            const uint8_t idx = pixels[sourceY * CHAR_CHIIKAWA_W + sourceX];
+            if (idx == 0) continue;
+            if (idx <= 48) putStripPx(x + xx, yy, stripY0, pgm_read_word(&SPRITE_PALETTE_565[idx]));
+            else putStripPx(x + xx, yy, stripY0, c565(54, 42, 46), idx - 48);
+        }
+    }
+}
+
 static void renderPetScreen() {
     const ThemePalette& th = getActiveTheme();
     const uint32_t nowMs = millis();
@@ -31,22 +61,12 @@ static void renderPetScreen() {
     const SpriteFrameRLE* table = sleeping ? CHAR_FRAMES_PET_SLEEP :
                                   eating ? CHAR_FRAMES_PET_EAT :
                                   gPetGame.lowNeeds() ? CHAR_FRAMES_PET_SAD : CHAR_FRAMES_CHIIKAWA;
-    static uint8_t pixels[CHAR_CHIIKAWA_W * CHAR_CHIIKAWA_H];
-    static const SpriteFrameRLE* cachedTable = nullptr;
-    static uint8_t cachedFrame = 255;
-    if (cachedTable != table || cachedFrame != frame) {
-        RleStream stream;
-        stream.init(table, frame);
-        for (size_t i = 0; i < sizeof(pixels); ++i) pixels[i] = stream.nextPixel();
-        cachedTable = table;
-        cachedFrame = frame;
-    }
+    const uint8_t* pixels = petSpritePixels(table, frame);
 
     const int petX = gPetGame.x;
     const int bob = sleeping || eating ? 0 : (frame & 1) ? -2 : 0;
     const int petY = gPetGame.y + bob - (happy && frame == 2 ? 5 : 0);
     const uint16_t ink = th.textMain;
-    const uint16_t green = c565(90, 174, 122);
     const uint16_t pink = c565(245, 116, 158);
     const uint16_t blue = c565(115, 157, 218);
     const uint16_t cream = c565(255, 252, 246);
@@ -57,51 +77,16 @@ static void renderPetScreen() {
     const int speechW = measureText4Bit(FONT_PET_10, speech) + 16;
     const int speechX = constrain(petX + 44 - speechW / 2, 7, 233 - speechW);
     const int speechY = max(59, petY - 22);
-    char levelStr[14];
-    snprintf(levelStr, sizeof(levelStr), "Lv.%u", unsigned(gPetGame.level()));
+    char levelStr[20];
+    snprintf(levelStr, sizeof(levelStr), "L%u C%lu", unsigned(gPetGame.level()), (unsigned long)gRoom.data.coins);
 
     for (int stripY0 = 0; stripY0 < SCREEN_H; stripY0 += STRIP_H) {
-        for (int sy = 0; sy < STRIP_H; ++sy) {
-            const int y = stripY0 + sy;
-            uint16_t color = y < 134 ? c565(244 - y / 12, 248, 255) :
-                             y < 207 ? c565(224, 240 - (y - 134) / 12, 218) : cream;
-            if (th.isNight) color = y < 134 ? c565(33, 42, 72) :
-                                   y < 207 ? c565(49, 73, 71) : c565(38, 44, 78);
-            for (int x = 0; x < SCREEN_W; ++x) stripBuf[sy * SCREEN_W + x] = color;
-        }
-
-        // A tiny garden room, with a window, clouds, and flowers behind the pet.
-        drawRoundedCardStrip(stripY0, 174, 65, 222, 113, 8,
-                             th.isNight ? c565(48, 58, 98) : c565(209, 234, 255),
-                             15, th.cardBorder, true);
-        for (int y = 68; y <= 110; ++y) putStripPx(198, y, stripY0, cream);
-        for (int x = 177; x <= 219; ++x) putStripPx(x, 89, stripY0, cream);
-        petEllipseStrip(stripY0, 30, 84, 12, 5, cream);
-        petEllipseStrip(stripY0, 41, 80, 11, 8, cream);
-        petEllipseStrip(stripY0, 54, 84, 12, 5, cream);
-        for (int i = 0; i < 6; ++i) {
-            const int x = 17 + i * 39;
-            const int y = 155 + (i % 3) * 19;
-            for (int dy = 0; dy < 7; ++dy) putStripPx(x, y + dy, stripY0, green);
-            petEllipseStrip(stripY0, x, y, 3, 3, i & 1 ? pink : c565(255, 210, 98));
-            putStripPx(x, y, stripY0, cream);
-        }
+        renderRoomBackgroundStrip(stripY0);
 
         petEllipseStrip(stripY0, petX + 43, gPetGame.y + 78, 26, 4,
                         th.isNight ? c565(20, 43, 43) : c565(116, 157, 112), 5);
 
-        // Nearest-neighbour sampling of the original RLE palette at 3/4 scale.
-        for (int y = max(petY, stripY0); y <= min(petY + 80, stripY0 + STRIP_H - 1); ++y) {
-            const int srcY = (y - petY) * 4 / 3;
-            for (int x = 0; x < 87; ++x) {
-                int srcX = x * 4 / 3;
-                if (gPetGame.facingLeft()) srcX = 115 - srcX;
-                const uint8_t idx = pixels[srcY * 116 + srcX];
-                if (idx == 0) continue;
-                if (idx <= 48) putStripPx(petX + x, y, stripY0, pgm_read_word(&SPRITE_PALETTE_565[idx]));
-                else putStripPx(petX + x, y, stripY0, c565(54, 42, 46), idx - 48);
-            }
-        }
+        petCharacterStrip(stripY0, pixels, petX, petY, 87, 81, gPetGame.facingLeft());
 
         drawRoundedCardStrip(stripY0, speechX, speechY, speechX + speechW, speechY + 18,
                              7, cream, 15, th.cardBorder, true);
@@ -121,11 +106,11 @@ static void renderPetScreen() {
         // The HUD is drawn last so motion never paints over the controls.
         drawRoundedCardStrip(stripY0, 6, 5, 233, 56, 12,
                              th.msgCardBg, 15, th.cardBorder, true);
-        drawText4BitStrip(stripY0, FONT_PET_13, "치이카와 다마고치", 14, 12, ink);
-        drawText4BitStrip(stripY0, FONT_PET_13, levelStr, 190, 12, th.accent);
+        drawText4BitStrip(stripY0, FONT_STUDY_13, "치이카와의 방", 14, 12, ink);
+        drawText4BitStrip(stripY0, FONT_STUDY_10, levelStr, 225 - measureText4Bit(FONT_STUDY_10, levelStr), 15, th.accent);
         const uint8_t stats[] = {gPetGame.data.fullness, gPetGame.data.happiness, gPetGame.data.energy};
         const char* labels[] = {"밥", "행복", "기력"};
-        const uint16_t colors[] = {green, pink, blue};
+        const uint16_t colors[] = {c565(90, 174, 122), pink, blue};
         const int starts[] = {14, 86, 158};
         for (int i = 0; i < 3; ++i) {
             drawText4BitStrip(stripY0, FONT_PET_10, labels[i], starts[i], 36, th.textSub);
