@@ -30,6 +30,7 @@
 #include "touch_button.h"
 #include "touch_gestures.h"
 #include "pet_game.h"
+#include "exchange_rate.h"
 #endif
 
 #if defined(CONFIG_IDF_TARGET_ESP32C2) && defined(GEEKCLOCK_XTAL_MHZ)
@@ -40,6 +41,9 @@ static_assert(CONFIG_XTAL_FREQ == GEEKCLOCK_XTAL_MHZ,
 #include "chiikawa_assets.h"
 #if defined(GEEKCLOCK_SMALLTV_PRO)
 #include "pet_assets.h"
+#include "exchange_assets.h"
+#include "mario_assets.h"
+#include "mario_title_assets.h"
 #endif
 #if defined(ARDUINO_ARCH_ESP32)
 #include "web_ui_gzip.h"
@@ -84,7 +88,7 @@ static bool gFsMounted = false;
 static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.1-ESP32C2";
 static constexpr const char* DEVICE_MODEL = "SDC2 (ESP32-C2)";
 #elif defined(GEEKCLOCK_SMALLTV_PRO)
-static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.4-SmallTV-PRO";
+static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.7-SmallTV-PRO";
 static constexpr const char* DEVICE_MODEL = "GeekMagic SmallTV-PRO";
 #elif defined(ARDUINO_ARCH_ESP32)
 static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.1-ESP32";
@@ -148,8 +152,57 @@ static bool gForceRedraw = true;
 static TouchButton gTouchButton;
 static TouchGestures gTouchGestures;
 static PetGame gPetGame;
+enum class ScreenMode : uint8_t { Clock, Pet, Exchange, Mario };
+static ScreenMode gScreenMode = ScreenMode::Clock;
+static ExchangeRateClient gExchange;
+struct ExchangeView {
+    bool valid = false;
+    bool loading = false;
+    bool stale = false;
+    double krwPerJpy = 0;
+    char rateDate[11] = {};
+    char fetchedAt[32] = {};
+    char error[72] = {};
+};
+static char gExchangeDiagnostic[72] = {};
+static ExchangeView gExchangeView;
+static uint32_t gExchangeRevision = UINT32_MAX;
 static uint32_t gPetLastSaveMs = 0;
 static const char* gLastTouchGesture = "none";
+struct MarioClockView {
+    int hour = 0, minute = 0, second = 0;
+    int year = 0, month = 0, day = 0;
+    bool timeValid = false, use12h = false, showSec = false;
+    uint32_t nowMs = 0, jumpStartedMs = 0;
+    bool jumpActive = false;
+};
+static MarioClockView gMarioView;
+
+static void updateMarioView() {
+    gMarioView.nowMs = millis();
+    gMarioView.use12h = gCfg.use12h;
+    gMarioView.showSec = gCfg.showSec;
+    const time_t now = time(nullptr);
+    gMarioView.timeValid = now > 1700000000;
+    if (gMarioView.timeValid) {
+        struct tm local;
+        localtime_r(&now, &local);
+        gMarioView.hour = local.tm_hour;
+        gMarioView.minute = local.tm_min;
+        gMarioView.second = local.tm_sec;
+        gMarioView.year = local.tm_year + 1900;
+        gMarioView.month = local.tm_mon + 1;
+        gMarioView.day = local.tm_mday;
+    }
+    if (gMarioView.jumpActive && uint32_t(gMarioView.nowMs - gMarioView.jumpStartedMs) >= 900)
+        gMarioView.jumpActive = false;
+}
+
+static void triggerMarioJump() {
+    gMarioView.jumpStartedMs = millis();
+    gMarioView.jumpActive = true;
+    gForceRedraw = true;
+}
 #endif
 
 // ============================================================================
@@ -765,11 +818,15 @@ static void renderClockScreen() {
 // ============================================================================
 #if defined(GEEKCLOCK_SMALLTV_PRO)
 #include "pet_renderer.h"
+#include "exchange_renderer.h"
+#include "mario_renderer.h"
 #endif
 
 static void renderCurrentScreen() {
 #if defined(GEEKCLOCK_SMALLTV_PRO)
-    if (gPetGame.active) { renderPetScreen(); return; }
+    if (gScreenMode == ScreenMode::Mario) { updateMarioView(); renderMarioScreen(); return; }
+    if (gScreenMode == ScreenMode::Exchange) { renderExchangeScreen(); return; }
+    if (gScreenMode == ScreenMode::Pet) { renderPetScreen(); return; }
 #endif
     renderClockScreen();
 }
@@ -945,11 +1002,82 @@ static void loadPetState() {
     gPetLastSaveMs = millis();
 }
 
-static void setPetMode(bool active) {
-    if (gPetGame.active == active) return;
-    gPetGame.active = active;
-    gForceRedraw = true;
+static const char* screenModeName() {
+    return gScreenMode == ScreenMode::Pet ? "pet" :
+           gScreenMode == ScreenMode::Exchange ? "exchange" :
+           gScreenMode == ScreenMode::Mario ? "mario" : "clock";
+}
+
+static void updateExchangeView() {
+    const ExchangeSnapshot state = gExchange.snapshot();
+    if (gExchangeRevision == state.revision && gExchangeView.stale == state.stale) return;
+    gExchangeRevision = state.revision;
+    gExchangeView.valid = state.valid;
+    gExchangeView.loading = state.loading;
+    gExchangeView.stale = state.stale;
+    gExchangeView.krwPerJpy = state.krwPerJpy;
+    strlcpy(gExchangeView.rateDate, state.rateDate, sizeof(gExchangeView.rateDate));
+    strlcpy(gExchangeDiagnostic, state.error, sizeof(gExchangeDiagnostic));
+    const char* error = state.error[0] ? "환율 조회 실패 · 연결을 확인해 주세요." : "";
+    if (strcmp(state.error, "Waiting for Wi-Fi") == 0) error = "Wi-Fi 연결을 기다리고 있어요.";
+    else if (strcmp(state.error, "Waiting for clock synchronization") == 0) error = "시간 동기화를 기다리고 있어요.";
+    strlcpy(gExchangeView.error, error, sizeof(gExchangeView.error));
+    gExchangeView.fetchedAt[0] = '\0';
+    if (state.fetchedEpoch > 1700000000UL) {
+        // Format KST independently of SNTP/TZ initialization during boot.
+        time_t kstEpoch = time_t(state.fetchedEpoch) + 9 * 3600;
+        struct tm kst;
+        gmtime_r(&kstEpoch, &kst);
+        strftime(gExchangeView.fetchedAt, sizeof(gExchangeView.fetchedAt), "%m/%d %H:%M KST", &kst);
+    }
+    if (gScreenMode == ScreenMode::Exchange) gForceRedraw = true;
+}
+
+static void loadScreenState() {
+    gScreenMode = gPetGame.active ? ScreenMode::Pet : ScreenMode::Clock;
+    Preferences prefs;
+    if (prefs.begin("chiiscreen", true)) {
+        uint8_t mode = prefs.getUChar("mode", uint8_t(gScreenMode));
+        if (mode <= uint8_t(ScreenMode::Mario)) gScreenMode = ScreenMode(mode);
+        prefs.end();
+    }
+    gPetGame.active = gScreenMode == ScreenMode::Pet;
+    gExchange.begin();
+    updateExchangeView();
+}
+
+static void setScreenMode(ScreenMode mode) {
+    if (gScreenMode == mode) return;
+    gScreenMode = mode;
+    gPetGame.active = mode == ScreenMode::Pet;
     savePetState();
+    Preferences prefs;
+    if (prefs.begin("chiiscreen", false)) {
+        prefs.putUChar("mode", uint8_t(mode));
+        prefs.end();
+    }
+    if (mode == ScreenMode::Exchange) gExchange.request(false);
+    updateExchangeView();
+    gForceRedraw = true;
+}
+
+static void setPetMode(bool active) {
+    setScreenMode(active ? ScreenMode::Pet : ScreenMode::Clock);
+}
+
+static String exchangeStatusJson() {
+    updateExchangeView();
+    String j = "{\"valid\":" + String(gExchangeView.valid ? "true" : "false");
+    j += ",\"loading\":" + String(gExchangeView.loading ? "true" : "false");
+    j += ",\"stale\":" + String(gExchangeView.stale ? "true" : "false");
+    j += ",\"krwPerJpy\":" + (gExchangeView.valid ? String(gExchangeView.krwPerJpy, 6) : String("null"));
+    j += ",\"krwPer100Jpy\":" + (gExchangeView.valid ? String(gExchangeView.krwPerJpy * 100.0, 2) : String("null"));
+    j += ",\"rateDate\":\"" + String(gExchangeView.rateDate) + "\"";
+    j += ",\"fetchedAt\":\"" + String(gExchangeView.fetchedAt) + "\"";
+    j += ",\"error\":\"" + escapeJson(gExchangeView.error) + "\"";
+    j += ",\"diagnostic\":\"" + escapeJson(gExchangeDiagnostic) + "\"";
+    j += ",\"source\":\"ECB via Frankfurter\",\"referenceOnly\":true}";
+    return j;
 }
 
 static void advanceClockCharacter() {
@@ -981,21 +1109,40 @@ static void serviceTouchButton() {
     const Gesture gesture = gTouchGestures.update(gTouchButton.pressed(), nowMs);
     if (gesture == Gesture::Double) {
         gLastTouchGesture = "double";
-        setPetMode(!gPetGame.active);
+        setScreenMode(ScreenMode((uint8_t(gScreenMode) + 1) % 4));
     } else if (gesture == Gesture::Single) {
         gLastTouchGesture = "single";
         if (gPetGame.active) {
             if (gPetGame.play(nowMs)) { savePetState(); gForceRedraw = true; }
+        } else if (gScreenMode == ScreenMode::Mario) {
+            triggerMarioJump();
+        } else if (gScreenMode == ScreenMode::Exchange) {
+            gExchange.request(true);
+            updateExchangeView();
         } else {
             advanceClockCharacter();
         }
     } else if (gesture == Gesture::Long) {
         gLastTouchGesture = "long";
-        if (gPetGame.active && gPetGame.feed(nowMs)) {
+        if (gScreenMode == ScreenMode::Exchange || gScreenMode == ScreenMode::Mario) {
+            setScreenMode(ScreenMode::Clock);
+        } else if (gPetGame.active && gPetGame.feed(nowMs)) {
             savePetState();
             gForceRedraw = true;
         }
     }
+}
+
+static String marioStatusJson() {
+    updateMarioView();
+    String j = "{\"timeValid\":" + String(gMarioView.timeValid ? "true" : "false");
+    j += ",\"hour\":" + String(gMarioView.hour) + ",\"minute\":" + String(gMarioView.minute);
+    j += ",\"second\":" + String(gMarioView.second);
+    j += ",\"year\":" + String(gMarioView.year) + ",\"month\":" + String(gMarioView.month);
+    j += ",\"day\":" + String(gMarioView.day);
+    j += ",\"showSec\":" + String(gMarioView.showSec ? "true" : "false");
+    j += ",\"jumping\":" + String(gMarioView.jumpActive ? "true" : "false") + "}";
+    return j;
 }
 
 static String petStatusJson() {
@@ -1371,6 +1518,9 @@ static void setupWebServer() {
         j += "\"lastTouchGesture\":\"" + String(gLastTouchGesture) + "\",";
         j += "\"pet\":" + petStatusJson() + ",";
         j += "\"hardware\":" + hardwareStatusJson() + ",";
+        j += "\"screenMode\":\"" + String(screenModeName()) + "\",";
+        j += "\"exchange\":" + exchangeStatusJson() + ",";
+        j += "\"mario\":" + marioStatusJson() + ",";
 #endif
 #if defined(ARDUINO_ARCH_ESP32)
         const esp_partition_t* running = esp_ota_get_running_partition();
@@ -1390,6 +1540,46 @@ static void setupWebServer() {
     });
 
 #if defined(GEEKCLOCK_SMALLTV_PRO)
+    server.on("/api/screen", HTTP_POST, []() {
+        addCors();
+        char mode[16] = {};
+        extractJsonStr(server.arg("plain"), "mode", mode, sizeof(mode));
+        if (strcmp(mode, "clock") == 0) setScreenMode(ScreenMode::Clock);
+        else if (strcmp(mode, "pet") == 0) setScreenMode(ScreenMode::Pet);
+        else if (strcmp(mode, "exchange") == 0) setScreenMode(ScreenMode::Exchange);
+        else if (strcmp(mode, "mario") == 0) setScreenMode(ScreenMode::Mario);
+        else {
+            server.send(400, "application/json", "{\"error\":\"Unknown screen mode\"}");
+            return;
+        }
+        server.send(200, "application/json", "{\"mode\":\"" + String(screenModeName()) + "\"}");
+    });
+    server.on("/api/mario/jump", HTTP_POST, []() {
+        addCors();
+        if (gScreenMode != ScreenMode::Mario) {
+            server.send(409, "application/json", "{\"error\":\"먼저 마리오 시계 화면을 선택해 주세요.\"}");
+            return;
+        }
+        triggerMarioJump();
+        server.send(200, "application/json", "{\"ok\":true}");
+    });
+    server.on("/api/exchange", HTTP_GET, []() {
+        addCors();
+        server.send(200, "application/json", exchangeStatusJson());
+    });
+    server.on("/api/exchange/refresh", HTTP_POST, []() {
+        addCors();
+        if (WiFi.status() != WL_CONNECTED || time(nullptr) < 1700000000) {
+            server.send(409, "application/json", "{\"error\":\"Wi-Fi 연결과 시간 동기화를 기다려 주세요.\"}");
+            return;
+        }
+        if (!gExchange.snapshot().loading && !gExchange.request(true)) {
+            server.send(429, "application/json", "{\"error\":\"환율 갱신은 30초 간격으로 할 수 있어요.\"}");
+            return;
+        }
+        server.send(202, "application/json", exchangeStatusJson());
+    });
+
     server.on("/api/pet", HTTP_GET, []() {
         addCors();
         server.send(200, "application/json", petStatusJson());
@@ -1632,6 +1822,11 @@ static void setupWebServer() {
 // Setup & Main Loop
 // ============================================================================
 void setup() {
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+    // Keep restored RTC time in KST even before Wi-Fi/NTP initialization.
+    setenv("TZ", "KST-9", 1);
+    tzset();
+#endif
     // 1. Backlight PWM setup (avoid full flash during boot)
 #if !defined(ARDUINO_ARCH_ESP32)
     analogWriteRange(255);
@@ -1679,6 +1874,7 @@ void setup() {
     loadConfigFromFS();
 #if defined(GEEKCLOCK_SMALLTV_PRO)
     loadPetState();
+    loadScreenState();
 #endif
 
     // 3. Initialize 240x240 ST7789 IPS Display (SPI_MODE3 for CS tied to GND!)
@@ -1768,7 +1964,7 @@ void setup() {
 
     if (WiFi.status() == WL_CONNECTED
 #if defined(GEEKCLOCK_SMALLTV_PRO)
-        && !gPetGame.active
+        && gScreenMode == ScreenMode::Clock
 #endif
     ) {
         fetchLiveWeather();
@@ -1787,6 +1983,13 @@ void loop() {
 #endif
 #if defined(GEEKCLOCK_SMALLTV_PRO)
     serviceTouchButton();
+    static uint32_t marioFrameMs = 0;
+    if (gScreenMode == ScreenMode::Mario && uint32_t(millis() - marioFrameMs) >= 100) {
+        marioFrameMs = millis();
+        gForceRedraw = true;
+    }
+    gExchange.service();
+    updateExchangeView();
     if (gPetGame.tick(millis()) && gPetGame.active) gForceRedraw = true;
     if (uint32_t(millis() - gPetLastSaveMs) >= 60000UL) savePetState();
 #endif
@@ -1821,7 +2024,7 @@ void loop() {
     // Periodic Open-Meteo Weather Fetch (every 15 minutes, or immediately when invalidated)
     if (WiFi.status() == WL_CONNECTED
 #if defined(GEEKCLOCK_SMALLTV_PRO)
-        && !gPetGame.active
+        && gScreenMode == ScreenMode::Clock
 #endif
     ) {
         unsigned long interval = gWeather.valid ? 900000UL : 20000UL;

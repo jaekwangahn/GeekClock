@@ -139,7 +139,7 @@ static void renderPetScreen() {
         const int xpWidth = int(gPetGame.data.xp % 100) * 220 / 100;
         for (int x = 10; x < 230; ++x) putStripPx(x, 210, stripY0, th.cardBorder);
         for (int x = 10; x < 10 + xpWidth; ++x) putStripPx(x, 210, stripY0, pink);
-        const char* hint = "터치 놀이 / 꾹 밥 / 더블 시계";
+        const char* hint = "터치 놀이 / 꾹 밥 / 더블 환율";
         const int hintX = (240 - measureText4Bit(FONT_PET_10, hint)) / 2;
         drawText4BitStrip(stripY0, FONT_PET_10, hint, hintX, 222, th.textSub);
 

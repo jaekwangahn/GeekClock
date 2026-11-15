@@ -42,6 +42,14 @@ input[type=range]{flex:1;accent-color:var(--pink);}
 .pet .btn:disabled{opacity:.5;cursor:default;}
 .pet-hint{font-size:12px;line-height:1.7;color:var(--sub);margin:10px 0 0;}
 .pet-feedback{font-size:12px;min-height:18px;margin-top:8px;color:#9d3862;}
+.screen-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin:10px 0;}
+.screen-tabs button{border:1.5px solid var(--border);border-radius:12px;background:#fff;color:var(--sub);padding:11px 4px;font-size:13px;font-weight:700;cursor:pointer;}
+.screen-tabs button[aria-pressed=true]{background:var(--soft);border-color:var(--pink);color:#d63c72;}
+.screen-tabs button:disabled,.exchange .btn:disabled,.mario .btn:disabled{opacity:.5;cursor:default;}
+.exchange-rate{font-size:31px;font-weight:800;letter-spacing:-.8px;color:#b9386c;margin:8px 0 2px;font-variant-numeric:tabular-nums;}
+.exchange-unit{font-size:13px;color:var(--sub);font-weight:600;}
+.exchange-info{font-size:12px;line-height:1.8;color:var(--sub);margin:10px 0;}
+.exchange-status{font-size:12px;font-weight:700;color:#846233;min-height:18px;}
 .hardware summary{cursor:pointer;font-weight:700;font-size:14px;color:#d94b7d;}
 .hardware h3{font-size:12.5px;margin:18px 0 8px;color:var(--sub);}
 .hardware a{color:#b74e7c;}
@@ -49,6 +57,7 @@ input[type=range]{flex:1;accent-color:var(--pink);}
 .hw-list dt,.hw-list dd{margin:0;padding:7px 0;border-bottom:1px solid #f3e7ed;overflow-wrap:anywhere;}
 .hw-list dt{color:var(--sub);padding-right:10px;}.hw-list dd{font-weight:600;}
 .hw-note{font-size:11.5px;color:var(--sub);line-height:1.7;margin:10px 0 0;}
+@media(max-width:460px){.screen-tabs{grid-template-columns:repeat(2,minmax(0,1fr));}}
 @media(max-width:370px){.hw-list{grid-template-columns:minmax(90px,.75fr) minmax(0,1.4fr);font-size:11.5px;}}
 </style>
 </head>
@@ -57,6 +66,45 @@ input[type=range]{flex:1;accent-color:var(--pink);}
   <h1>치이카와 독립형 시계 <span class="badge">Standalone NTP</span></h1>
   <div class="status" id="statusBox">장비 상태를 불러오는 중...</div>
 </div>
+
+<section class="card" id="screenCard" aria-labelledby="screenHeading" hidden>
+  <h2 id="screenHeading">📺 화면 선택</h2>
+  <div class="screen-tabs" role="group" aria-label="기기 화면 선택">
+    <button type="button" data-screen="clock" aria-pressed="false" onclick="setScreenMode('clock')">시계</button>
+    <button type="button" data-screen="pet" aria-pressed="false" onclick="setScreenMode('pet')">다마고치</button>
+    <button type="button" data-screen="exchange" aria-pressed="false" onclick="setScreenMode('exchange')">엔화 환율</button>
+    <button type="button" data-screen="mario" aria-pressed="false" onclick="setScreenMode('mario')">마리오 시계</button>
+  </div>
+  <p class="pet-hint">상단 더블 터치: 시계 → 다마고치 → 엔화 환율 → 마리오 시계 → 시계</p>
+  <div class="pet-feedback" id="screenFeedback" role="status" aria-live="polite"></div>
+</section>
+
+<section class="card mario" id="marioCard" aria-labelledby="marioHeading" hidden>
+  <h2 id="marioHeading">🍄 마리오 레트로 시계</h2>
+  <div class="status" id="marioStatus">시계 상태를 기다리고 있어요.</div>
+  <p class="pet-hint">파란 하늘과 주황색 타이틀 보드의 레트로 화면에 현재 시각과 날짜를 표시합니다.</p>
+  <div class="row">
+    <button class="btn sec" type="button" id="marioMode" onclick="setScreenMode('mario')">마리오 시계 보기</button>
+    <button class="btn sec" type="button" id="marioJump" onclick="jumpMario()" disabled>🍄 점프</button>
+  </div>
+  <p class="pet-hint">마리오 화면에서 한 번 터치: 점프 · 길게 터치: 시계로 돌아가기<br>더블 터치: 다음 화면<br>VS. SUPER MARIO BROS. 타이틀 화면 스타일</p>
+  <div class="pet-feedback" id="marioFeedback" role="status" aria-live="polite"></div>
+</section>
+
+<section class="card exchange" id="exchangeCard" aria-labelledby="exchangeHeading" hidden>
+  <h2 id="exchangeHeading">🇯🇵 일본 엔화 환율</h2>
+  <div class="exchange-unit">100엔 (100 JPY)당 원화</div>
+  <div class="exchange-rate" id="exchangeRate">—</div>
+  <div class="exchange-status" id="exchangeStatus" role="status" aria-live="polite">환율을 기다리고 있어요.</div>
+  <div class="exchange-info">
+    <div>환율 기준일: <strong id="exchangeDate">—</strong></div>
+    <div>마지막 조회: <span id="exchangeFetched">—</span></div>
+    <div>출처: <span id="exchangeSource">ECB via Frankfurter</span></div>
+  </div>
+  <button class="btn sec" type="button" id="exchangeRefresh" onclick="refreshExchange()">↻ 환율 다시 조회</button>
+  <div class="pet-feedback" id="exchangeFeedback" role="status" aria-live="polite"></div>
+  <p class="pet-hint">공시 기준환율이며 실시간 시세나 은행의 현찰 매매 환율과 다릅니다.<br>엔화 화면에서 한 번 터치: 다시 조회 (30초 간격) · 길게 터치: 시계로 돌아가기</p>
+</section>
 
 <section class="card pet" id="petCard" aria-labelledby="petHeading" hidden>
   <div class="pet-top">
@@ -76,7 +124,7 @@ input[type=range]{flex:1;accent-color:var(--pink);}
     <button class="btn sec" type="button" data-pet-care="sleep" onclick="petAction('sleep')" disabled>🌙 쉬게 하기</button>
   </div>
   <div class="pet-hint" id="petNeeds" hidden></div>
-  <p class="pet-hint">상단 더블 터치로 시계 ↔ 다마고치 전환<br>게임에서 한 번 터치하면 놀아 주기 · 약 0.9초 누르면 밥 주기</p>
+  <p class="pet-hint">상단 더블 터치: 시계 → 다마고치 → 엔화 환율 → 마리오 시계 → 시계<br>게임에서 한 번 터치하면 놀아 주기 · 약 0.9초 누르면 밥 주기</p>
   <div class="pet-feedback" id="petFeedback" role="status" aria-live="polite"></div>
 </section>
 
@@ -221,13 +269,15 @@ input[type=range]{flex:1;accent-color:var(--pink);}
 <script>
 let curChar='chiikawa', brtTimer=null;
 let petState=null, petBusy=false;
+let currentScreenMode=null, screenBusy=false, exchangeState=null, exchangeBusy=false;
+let marioState=null, marioBusy=false;
 
 function renderPet(p){
   const card=document.getElementById('petCard');
   if(!p || typeof p.active!=='boolean'){ card.hidden=true; petState=null; return; }
   petState=p; card.hidden=false;
   const activities={wander:'이리저리 산책하고 있어요 🌱',happy:'함께 놀아서 신났어요 💗',eating:'냠냠! 맛있게 먹고 있어요 🍙',sleeping:'쿨쿨, 체력을 채우고 있어요 🌙'};
-  document.getElementById('petActivity').textContent=p.active?(activities[p.activity]||'치이카와와 함께하는 시간'):'시계 모드에서도 치이카와는 잘 지내고 있어요.';
+  document.getElementById('petActivity').textContent=p.active?(activities[p.activity]||'치이카와와 함께하는 시간'):'다른 화면에서도 치이카와는 잘 지내고 있어요.';
   document.getElementById('petLevel').textContent=`Lv.${p.level} · 돌봄 ${p.careCount}회`;
   [['Fullness',p.fullness],['Happiness',p.happiness],['Energy',p.energy]].forEach(([key,value])=>{
     const n=Math.max(0,Math.min(100,Number(value)||0));
@@ -236,7 +286,7 @@ function renderPet(p){
   });
   const mode=document.getElementById('petMode');
   mode.textContent=p.active?'시계 화면으로 돌아가기':'다마고치 모드로 가기';
-  mode.disabled=petBusy;
+  mode.disabled=petBusy||screenBusy;
   const needsRest=p.energy<8||p.fullness<4;
   card.querySelectorAll('[data-pet-care]').forEach(b=>{
     const action=b.dataset.petCare;
@@ -245,6 +295,108 @@ function renderPet(p){
   const needs=document.getElementById('petNeeds');
   needs.hidden=!p.active||!needsRest;
   needs.textContent=needsRest?'밥을 먹고 쉬면 다시 놀 수 있어요. 밥 주기와 쉬게 하기로 돌봐 주세요.':'';
+}
+
+function renderScreenMode(mode){
+  const card=document.getElementById('screenCard');
+  if(!['clock','pet','exchange','mario'].includes(mode)){card.hidden=true;return;}
+  currentScreenMode=mode; card.hidden=false;
+  card.querySelectorAll('[data-screen]').forEach(button=>{
+    button.setAttribute('aria-pressed',String(button.dataset.screen===mode));
+    button.disabled=screenBusy||petBusy||marioBusy;
+  });
+  if(marioState) renderMario(marioState);
+}
+
+function renderMario(m){
+  const card=document.getElementById('marioCard');
+  if(!m || typeof m.timeValid!=='boolean'){card.hidden=true;marioState=null;return;}
+  marioState=m;card.hidden=false;
+  const timeValid=m.timeValid&&Number.isInteger(m.hour)&&Number.isInteger(m.minute);
+  document.getElementById('marioStatus').textContent=timeValid?
+    `기기 시각 ${String(m.hour).padStart(2,'0')}:${String(m.minute).padStart(2,'0')} · ${m.jumping?'마리오가 점프하고 있어요!':'타이틀 화면과 함께 움직여요.'}`:
+    '시간 동기화를 기다리고 있어요. Wi-Fi 연결을 확인해 주세요.';
+  document.getElementById('marioMode').disabled=screenBusy||petBusy||marioBusy||currentScreenMode==='mario';
+  document.getElementById('marioJump').disabled=screenBusy||petBusy||marioBusy||currentScreenMode!=='mario'||!!m.jumping;
+}
+
+async function jumpMario(){
+  if(marioBusy||screenBusy||petBusy||currentScreenMode!=='mario'||!marioState||marioState.jumping) return;
+  marioBusy=true;renderMario(marioState);renderScreenMode(currentScreenMode);
+  const feedback=document.getElementById('marioFeedback');
+  feedback.textContent='마리오에게 점프를 전하고 있어요...';
+  try{
+    const response=await fetch('/api/mario/jump',{method:'POST'});
+    if(!response.ok){
+      let detail=null;try{detail=await response.json();}catch(error){}
+      throw new Error(detail&&typeof detail.error==='string'?detail.error:'마리오 화면에서 다시 눌러 주세요.');
+    }
+    const result=await response.json();
+    if(result.ok!==true) throw new Error('점프 응답을 확인할 수 없어요.');
+    feedback.textContent='마리오가 점프해요! 🍄';
+    await fetchDeviceExtras();
+    setTimeout(()=>fetchDeviceExtras().catch(()=>{}),1100);
+  }catch(error){feedback.textContent=error.message||'기기와 연결하지 못했어요.';}
+  finally{marioBusy=false;if(marioState)renderMario(marioState);renderScreenMode(currentScreenMode);}
+}
+
+function renderExchange(e){
+  const card=document.getElementById('exchangeCard');
+  if(!e || typeof e.valid!=='boolean'){card.hidden=true;exchangeState=null;return;}
+  exchangeState=e; card.hidden=false;
+  const hasRate=e.valid&&typeof e.krwPer100Jpy==='number'&&Number.isFinite(e.krwPer100Jpy)&&e.krwPer100Jpy>0;
+  document.getElementById('exchangeRate').textContent=hasRate?e.krwPer100Jpy.toLocaleString('ko-KR',{minimumFractionDigits:2,maximumFractionDigits:2})+' 원':'—';
+  document.getElementById('exchangeDate').textContent=hasRate&&e.rateDate?e.rateDate:'—';
+  document.getElementById('exchangeFetched').textContent=e.fetchedAt||'—';
+  document.getElementById('exchangeSource').textContent=e.source||'ECB via Frankfurter';
+  const status=document.getElementById('exchangeStatus');
+  status.textContent=e.loading?(hasRate?'조회 중 · 마지막 확인 환율을 표시해요.':'환율을 조회하고 있어요...'):e.error?(hasRate?'저장된 환율 · '+e.error:e.error):!hasRate?'환율을 아직 받지 못했어요.':e.stale?'저장된 환율 · 최신 조회가 필요해요.':'공시 기준환율 조회 완료';
+  const button=document.getElementById('exchangeRefresh');
+  button.disabled=exchangeBusy||e.loading;
+  button.textContent=e.loading||exchangeBusy?'환율 조회 중...':'↻ 환율 다시 조회';
+}
+
+async function fetchDeviceExtras(){
+  const response=await fetch('/api/status');
+  if(!response.ok) throw new Error('기기 상태를 확인하지 못했어요.');
+  renderDeviceExtras(await response.json());
+}
+
+async function setScreenMode(mode){
+  if(screenBusy||petBusy||marioBusy||!['clock','pet','exchange','mario'].includes(mode)) return;
+  screenBusy=true; renderScreenMode(currentScreenMode); if(petState) renderPet(petState);
+  const feedback=document.getElementById('screenFeedback');
+  feedback.textContent='화면을 전환하고 있어요...';
+  try{
+    const response=await fetch('/api/screen',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
+    if(!response.ok) throw new Error('화면을 전환하지 못했어요. 다시 시도해 주세요.');
+    const result=await response.json();
+    if(!['clock','pet','exchange','mario'].includes(result.mode)) throw new Error('기기 화면 응답을 확인할 수 없어요.');
+    renderScreenMode(result.mode);
+    feedback.textContent={clock:'시계 화면을 표시했어요.',pet:'다마고치 화면을 표시했어요.',exchange:'엔화 환율 화면을 표시했어요.',mario:'마리오 시계 화면을 표시했어요.'}[result.mode];
+    await fetchDeviceExtras();
+  }catch(error){feedback.textContent=error.message||'기기와 연결하지 못했어요.';}
+  finally{screenBusy=false;renderScreenMode(currentScreenMode);if(petState)renderPet(petState);}
+}
+
+async function refreshExchange(){
+  if(exchangeBusy||!exchangeState||exchangeState.loading) return;
+  exchangeBusy=true; renderExchange(exchangeState);
+  const feedback=document.getElementById('exchangeFeedback');
+  feedback.textContent='환율 조회를 요청하고 있어요...';
+  try{
+    const response=await fetch('/api/exchange/refresh',{method:'POST'});
+    if(!response.ok){
+      let detail=null;try{detail=await response.json();}catch(error){}
+      if(response.status===429) throw new Error('다시 조회하려면 잠시 기다려 주세요. 수동 조회 간격은 30초예요.');
+      throw new Error(detail&&typeof detail.error==='string'?detail.error:'Wi-Fi 연결과 시간 동기화를 확인해 주세요.');
+    }
+    const result=await response.json();
+    if(typeof result.valid!=='boolean') throw new Error('환율 응답을 확인할 수 없어요.');
+    renderExchange(result);
+    feedback.textContent='조회를 시작했어요. 완료되면 환율이 자동으로 바뀝니다.';
+  }catch(error){feedback.textContent=error.message||'기기와 연결하지 못했어요.';}
+  finally{exchangeBusy=false;if(exchangeState)renderExchange(exchangeState);}
 }
 
 function hardwareBytes(value){
@@ -317,13 +469,16 @@ function renderHardware(h){
 
 function renderDeviceExtras(d){
   renderHardware(d.hardware);
-  renderPet(d.pet);
+  renderMario(d.mario);
+  if(!petBusy) renderPet(d.pet);
+  if(!screenBusy) renderScreenMode(d.screenMode);
+  if(!exchangeBusy) renderExchange(d.exchange);
   if(d.version) document.getElementById('firmwareVersion').textContent=d.version;
 }
 
 async function petAction(action){
-  if(petBusy || !petState) return;
-  petBusy=true; renderPet(petState);
+  if(petBusy || screenBusy || marioBusy || !petState) return;
+  petBusy=true; renderPet(petState); renderScreenMode(currentScreenMode);
   const feedback=document.getElementById('petFeedback');
   feedback.textContent='치이카와에게 전하고 있어요...';
   try{
@@ -337,10 +492,11 @@ async function petAction(action){
     const p=await r.json();
     if(typeof p.active!=='boolean') throw new Error('기기 응답을 확인할 수 없어요. 다시 시도해 주세요.');
     renderPet(p);
+    if(action==='enter'||action==='exit') renderScreenMode(p.active?'pet':'clock');
     const messages={enter:'치이카와의 작은 방에 도착했어요 🌱',exit:'시계 화면으로 돌아왔어요.',feed:'치이카와에게 밥을 주었어요 🍙',play:'치이카와와 함께 놀았어요 💗',sleep:'치이카와가 편안히 쉬어요 🌙'};
     feedback.textContent=messages[action]||'반영했어요.';
   }catch(e){ feedback.textContent=e.message||'기기와 연결하지 못했어요. 연결을 확인해 주세요.'; }
-  finally{ petBusy=false; if(petState) renderPet(petState); }
+  finally{ petBusy=false; if(petState) renderPet(petState); renderScreenMode(currentScreenMode); }
 }
 document.querySelectorAll('#charChips .chip').forEach(el=>{
   el.onclick=()=>{
@@ -418,7 +574,7 @@ async function loadState(){
     const r=await fetch('/api/status');
     if(!r.ok) throw new Error('기기 상태를 불러오지 못했어요.');
     const d=await r.json();
-    if(!petBusy) renderDeviceExtras(d);
+    renderDeviceExtras(d);
     document.getElementById('statusBox').innerHTML=
       `현재 시각: <b>${d.time}</b> (${d.ntpSynced?'NTP 동기화 완료 ✓':'NTP 동기화 대기 중...'})<br>`+
       `NTP 서버: <b>${d.ntpServer}</b> | IP: <b>${d.ip}</b> | 날씨: <b>${d.city} ${d.temp}°C</b>`;
@@ -514,7 +670,7 @@ setInterval(async()=>{
     const r=await fetch('/api/status');
     if(!r.ok) throw new Error('기기 상태를 불러오지 못했어요.');
     const d=await r.json();
-    if(!petBusy) renderDeviceExtras(d);
+    renderDeviceExtras(d);
     document.getElementById('statusBox').innerHTML=
       `현재 시각: <b>${d.time}</b> (${d.ntpSynced?'NTP 동기화 완료 ✓':'NTP 동기화 대기 중...'})<br>`+
       `NTP 서버: <b>${d.ntpServer}</b> | IP: <b>${d.ip}</b> | 날씨: <b>${d.city} ${d.temp}°C</b>`;

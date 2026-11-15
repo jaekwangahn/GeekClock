@@ -89,7 +89,7 @@ clang++ -std=c++17 -Wall -Wextra -Werror firmware/tests/pet_logic_test.cpp -o /t
 
 ## Pro V1.4 하드웨어 사양 표시
 
-최신 OTA 파일: [SmallTV-PRO_Chiikawa_ESP32_V1.4.bin](SmallTV-PRO_Chiikawa_ESP32_V1.4.bin) · [크기 및 SHA256](SmallTV-PRO_Chiikawa_ESP32_V1.4.json)
+V1.4 OTA 파일: [SmallTV-PRO_Chiikawa_ESP32_V1.4.bin](SmallTV-PRO_Chiikawa_ESP32_V1.4.bin) · [크기 및 SHA256](SmallTV-PRO_Chiikawa_ESP32_V1.4.json)
 
 V1.4에는 위의 다마고치 게임도 포함됩니다.
 
@@ -99,3 +99,69 @@ V1.4에는 위의 다마고치 게임도 포함됩니다.
 화면·GPIO·화면 SPI 설정 및 제조사 문서 사양은 런타임 측정값과 구분합니다.
 힙 용량은 칩 전체 SRAM 용량이 아니며, Bluetooth 하드웨어 지원과 펌웨어 활성 상태도 별개입니다.
 플래시 동작 클럭은 기존 부트로더 헤더의 설정 대신 현재 클럭 레지스터에서 읽습니다.
+
+## SmallTV Pro 최신 펌웨어 V1.7
+
+[OTA 펌웨어](SmallTV-PRO_Chiikawa_ESP32_V1.7.bin) · [크기 및 SHA256](SmallTV-PRO_Chiikawa_ESP32_V1.7.json)
+
+시계·다마고치·엔화 환율·마리오 타이틀 시계를 기기 단독으로 실행합니다.
+상단 더블 터치는 **시계 → 다마고치 → 엔화 환율 → 마리오 시계 → 시계** 순서입니다.
+웹 설정에서도 화면 선택과 각 모드의 동작을 실행할 수 있습니다.
+
+| 화면 | 한 번 터치 | 약 0.9초 길게 터치 |
+| --- | --- | --- |
+| 시계 | 캐릭터 변경 | 동작 없음 |
+| 다마고치 | 놀아주기 | 밥 주기 |
+| 엔화 환율 | 다시 조회 | 기본 시계로 복귀 |
+| 마리오 시계 | 점프 | 기본 시계로 복귀 |
+
+선택한 화면과 다마고치 상태는 재부팅 후에도 유지됩니다.
+
+## 일본 엔화 환율
+
+100엔당 원화(KRW)를 표시하며, ECB 기준일과 기기 조회 시각(KST)을 구분합니다.
+데이터: [Frankfurter ECB 기준환율](https://api.frankfurter.dev/v2/providers/ecb/rate/jpy/krw).
+공시 참고환율이며 은행의 현찰 매수·매도 가격이나 실시간 체결 가격이 아닙니다.
+공시가 없는 주말·휴일에는 최근 영업일 기준일이 표시됩니다.
+
+인증서 검증 HTTPS 요청을 별도 작업에서 실행해 터치와 게임이 멈추지 않게 합니다.
+15분마다 확인하고, 실패하면 60초 뒤 재시도합니다. 수동 조회는 30초 간격입니다.
+마지막 정상 환율은 NVS에 저장하고, 조회 실패·오프라인·재부팅 중에는 저장값임을 표시합니다.
+
+조회 API: `GET /api/exchange`, `POST /api/exchange/refresh`.
+화면 선택: `POST /api/screen`에 예를 들어 `{"mode":"exchange"}`를 전송합니다.
+모드 값: `clock`, `pet`, `exchange`, `mario`.
+
+## 마리오 타이틀 시계
+
+[참고 이미지](assets/mario_title_reference.png)의 VS. SUPER MARIO BROS. 타이틀 화면을
+240×240에 맞췄습니다. 파란 배경·주황 타이틀 보드·상단 HUD·초록 언덕·벽돌 바닥 위에
+현재 한국 시각과 날짜를 표시하고, 작은 마리오가 돌아다니며 점프합니다.
+기존 초 표시·12/24시간제와 화면 밝기·심야 밝기 설정을 따릅니다.
+
+[타이틀 시계 애니메이션](../previews/preview_mario_title.gif)
+
+점프 API: `POST /api/mario/jump`. 상태는 `/api/status`의 `mario`에서 확인합니다.
+
+## Pro 검증 및 자산 재생성
+
+GeekClock 루트에서 실행합니다. `clang++`, Pillow, PlatformIO가 필요합니다.
+
+```bash
+clang++ -std=c++17 -Wall -Wextra -Werror firmware/tests/exchange_rate_test.cpp -o /tmp/exchange-rate-test
+/tmp/exchange-rate-test
+clang++ -std=c++17 -Wall -Wextra -Werror firmware/tests/mario_scene_test.cpp -o /tmp/mario-scene-test
+/tmp/mario-scene-test
+.venv/bin/python firmware/tools/preview_exchange.py --output /tmp/geekmagic-exchange-preview
+.venv/bin/python firmware/tools/preview_mario.py --output /tmp/geekmagic-mario-preview
+.venv/bin/pio run -d firmware -e geekmagic_pro
+```
+
+환율 글꼴: `.venv/bin/python firmware/tools/generate_exchange_assets.py`.
+마리오 스프라이트: `.venv/bin/python firmware/tools/generate_mario_assets.py`.
+타이틀 배경·글꼴: `.venv/bin/python firmware/tools/generate_mario_title_assets.py`.
+
+V1.7 빌드·이미지 형식·해시 검증과 기기 OTA 설치를 완료했습니다.
+실제 기기에서 네 화면 전환, 한국 시각·날짜·초 표시, 점프 시작/종료, 환율 수신과
+기존 설정·돌봄 기록 보존을 확인했습니다. 네이티브 테스트와 실제 렌더러 미리보기에는
+ASan/UBSan 및 경계·시간 형식 검증을 사용했습니다.

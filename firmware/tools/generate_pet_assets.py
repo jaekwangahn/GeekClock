@@ -24,7 +24,7 @@ from generate_assets import (
 FIRMWARE = Path(__file__).resolve().parents[1]
 KOREAN_LABELS = (
     "치이카와 다마고치 배부름 행복 기력 터치 놀이 꾹 밥 더블 시계 "
-    "오늘도 함께 산책 중 맛있다 냠냠 좋아요 쿨쿨 쉬는 중 배고파요 놀아줘요 졸려요 레벨"
+    "오늘도 함께 산책 중 맛있다 냠냠 좋아요 쿨쿨 쉬는 중 배고파요 놀아줘요 졸려요 레벨 환율"
 )
 CHARSET = "".join(chr(cp) for cp in range(0x20, 0x7F)) + KOREAN_LABELS + "♡♥★·"
 

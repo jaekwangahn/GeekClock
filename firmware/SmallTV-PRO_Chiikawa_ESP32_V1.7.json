@@ -1,0 +1,25 @@
+{
+  "model": "GeekMagic SmallTV-PRO",
+  "version": "Chiikawa-Standalone-V1.7-SmallTV-PRO",
+  "environment": "geekmagic_pro",
+  "chip": "ESP32",
+  "bytes": 1418944,
+  "sha256": "ec1306b06af5b36554015c6f148e317b182ce6cb59ff652d371e590076b4679e",
+  "touchPin": 32,
+  "gestures": {
+    "single": "clock character / pet play / exchange refresh / Mario jump",
+    "double": "cycle clock, pet, exchange, mario",
+    "long900ms": "pet feed / exchange or mario to clock"
+  },
+  "pet": "roaming, needs, feed, play, sleep, XP, persistent state",
+  "ota": "application only; preserve existing partitions",
+  "hardware": "Live chip/CPU/flash/heap/PSRAM/OTA telemetry; board and manufacturer specs labeled separately",
+  "exchange": "100 JPY in KRW; ECB via Frankfurter; verified HTTPS, asynchronous refresh, persistent cache",
+  "screenCycle": [
+    "clock",
+    "pet",
+    "exchange",
+    "mario"
+  ],
+  "mario": "NES VS.SuperMario title artwork, fixed blue sky and orange sign; KST time/date, seconds, 12/24h, walking and touch jump"
+}
