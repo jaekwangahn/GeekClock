@@ -8,6 +8,7 @@
 #include <Preferences.h>
 #include <esp_ota_ops.h>
 #include <esp_wifi.h>
+#include <esp_chip_info.h>
 #else
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
@@ -27,6 +28,8 @@
 #include <time.h>
 #if defined(GEEKCLOCK_SMALLTV_PRO)
 #include "touch_button.h"
+#include "touch_gestures.h"
+#include "pet_game.h"
 #endif
 
 #if defined(CONFIG_IDF_TARGET_ESP32C2) && defined(GEEKCLOCK_XTAL_MHZ)
@@ -35,6 +38,9 @@ static_assert(CONFIG_XTAL_FREQ == GEEKCLOCK_XTAL_MHZ,
 #endif
 
 #include "chiikawa_assets.h"
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+#include "pet_assets.h"
+#endif
 #if defined(ARDUINO_ARCH_ESP32)
 #include "web_ui_gzip.h"
 #else
@@ -78,7 +84,7 @@ static bool gFsMounted = false;
 static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.1-ESP32C2";
 static constexpr const char* DEVICE_MODEL = "SDC2 (ESP32-C2)";
 #elif defined(GEEKCLOCK_SMALLTV_PRO)
-static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.2-SmallTV-PRO";
+static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.4-SmallTV-PRO";
 static constexpr const char* DEVICE_MODEL = "GeekMagic SmallTV-PRO";
 #elif defined(ARDUINO_ARCH_ESP32)
 static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.1-ESP32";
@@ -140,6 +146,10 @@ static uint8_t gAnimFrame = 0;
 static bool gForceRedraw = true;
 #if defined(GEEKCLOCK_SMALLTV_PRO)
 static TouchButton gTouchButton;
+static TouchGestures gTouchGestures;
+static PetGame gPetGame;
+static uint32_t gPetLastSaveMs = 0;
+static const char* gLastTouchGesture = "none";
 #endif
 
 // ============================================================================
@@ -753,6 +763,17 @@ static void renderClockScreen() {
 }
 
 // ============================================================================
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+#include "pet_renderer.h"
+#endif
+
+static void renderCurrentScreen() {
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+    if (gPetGame.active) { renderPetScreen(); return; }
+#endif
+    renderClockScreen();
+}
+
 // Backlight PWM Control (GPIO 5)
 // ============================================================================
 static void applyBacklight() {
@@ -894,19 +915,44 @@ static void saveConfigToFS() {
 }
 
 #if defined(GEEKCLOCK_SMALLTV_PRO)
-static void serviceTouchButton() {
-    static uint32_t lastSampleMs = 0;
-    const uint32_t nowMs = millis();
-    if (uint32_t(nowMs - lastSampleMs) < 20) return;
-    lastSampleMs = nowMs;
+static void savePetState() {
+    Preferences prefs;
+    if (prefs.begin("chiipet", false)) {
+        prefs.putUChar("full", gPetGame.data.fullness);
+        prefs.putUChar("happy", gPetGame.data.happiness);
+        prefs.putUChar("energy", gPetGame.data.energy);
+        prefs.putUShort("xp", gPetGame.data.xp);
+        prefs.putUInt("care", gPetGame.data.careCount);
+        prefs.putBool("active", gPetGame.active);
+        prefs.end();
+    }
+    gPetLastSaveMs = millis();
+}
 
-    // Median-of-three rejects isolated low-going sensor glitches.
-    const uint16_t a = touchRead(GEEKCLOCK_TOUCH_PIN);
-    const uint16_t b = touchRead(GEEKCLOCK_TOUCH_PIN);
-    const uint16_t c = touchRead(GEEKCLOCK_TOUCH_PIN);
-    const uint16_t raw = max(min(a, b), min(max(a, b), c));
-    if (!gTouchButton.update(raw, nowMs)) return;
+static void loadPetState() {
+    Preferences prefs;
+    if (prefs.begin("chiipet", true)) {
+        gPetGame.data.fullness = min((uint8_t)100, prefs.getUChar("full", 80));
+        gPetGame.data.happiness = min((uint8_t)100, prefs.getUChar("happy", 80));
+        gPetGame.data.energy = min((uint8_t)100, prefs.getUChar("energy", 80));
+        gPetGame.data.xp = prefs.getUShort("xp", 0);
+        gPetGame.data.careCount = prefs.getUInt("care", 0);
+        gPetGame.active = prefs.getBool("active", false);
+        prefs.end();
+    }
+    gPetGame.sanitize();
+    gPetGame.tick(millis());
+    gPetLastSaveMs = millis();
+}
 
+static void setPetMode(bool active) {
+    if (gPetGame.active == active) return;
+    gPetGame.active = active;
+    gForceRedraw = true;
+    savePetState();
+}
+
+static void advanceClockCharacter() {
     static const char* const characters[] = {"chiikawa", "hachiware", "usagi", "trio"};
     size_t next = 0;
     for (size_t i = 0; i < 4; ++i) {
@@ -920,6 +966,105 @@ static void serviceTouchButton() {
     gForceRedraw = true;
     saveConfigToFS();
 }
+
+static void serviceTouchButton() {
+    static uint32_t lastSampleMs = 0;
+    const uint32_t nowMs = millis();
+    if (uint32_t(nowMs - lastSampleMs) < 20) return;
+    lastSampleMs = nowMs;
+
+    const uint16_t a = touchRead(GEEKCLOCK_TOUCH_PIN);
+    const uint16_t b = touchRead(GEEKCLOCK_TOUCH_PIN);
+    const uint16_t c = touchRead(GEEKCLOCK_TOUCH_PIN);
+    const uint16_t raw = max(min(a, b), min(max(a, b), c));
+    gTouchButton.update(raw, nowMs);
+    const Gesture gesture = gTouchGestures.update(gTouchButton.pressed(), nowMs);
+    if (gesture == Gesture::Double) {
+        gLastTouchGesture = "double";
+        setPetMode(!gPetGame.active);
+    } else if (gesture == Gesture::Single) {
+        gLastTouchGesture = "single";
+        if (gPetGame.active) {
+            if (gPetGame.play(nowMs)) { savePetState(); gForceRedraw = true; }
+        } else {
+            advanceClockCharacter();
+        }
+    } else if (gesture == Gesture::Long) {
+        gLastTouchGesture = "long";
+        if (gPetGame.active && gPetGame.feed(nowMs)) {
+            savePetState();
+            gForceRedraw = true;
+        }
+    }
+}
+
+static String petStatusJson() {
+    String j = "{\"active\":" + String(gPetGame.active ? "true" : "false");
+    j += ",\"fullness\":" + String(gPetGame.data.fullness);
+    j += ",\"happiness\":" + String(gPetGame.data.happiness);
+    j += ",\"energy\":" + String(gPetGame.data.energy);
+    j += ",\"level\":" + String(gPetGame.level());
+    j += ",\"xp\":" + String(gPetGame.data.xp);
+    j += ",\"careCount\":" + String(gPetGame.data.careCount);
+    j += ",\"activity\":\"" + String(gPetGame.activityName()) + "\"";
+    j += ",\"x\":" + String(gPetGame.x) + ",\"y\":" + String(gPetGame.y) + "}";
+    return j;
+}
+
+static String hardwareStatusJson() {
+    esp_chip_info_t chip;
+    esp_chip_info(&chip);
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
+    const char* flashMode = "Unknown";
+    switch (ESP.getFlashChipMode()) {
+        case FM_QIO: flashMode = "QIO"; break;
+        case FM_QOUT: flashMode = "QOUT"; break;
+        case FM_DIO: flashMode = "DIO"; break;
+        case FM_DOUT: flashMode = "DOUT"; break;
+        case FM_FAST_READ: flashMode = "FAST_READ"; break;
+        case FM_SLOW_READ: flashMode = "SLOW_READ"; break;
+        default: break;
+    }
+    String j;
+    j.reserve(1200);
+    j = "{\"model\":\"" + String(DEVICE_MODEL) + "\"";
+    j += ",\"chipModel\":\"" + String(ESP.getChipModel()) + "\"";
+    j += ",\"chipRevision\":" + String(chip.revision);
+    j += ",\"chipCores\":" + String(chip.cores);
+    j += ",\"cpuMHz\":" + String(ESP.getCpuFreqMHz());
+    j += ",\"xtalMHz\":" + String(getXtalFrequencyMhz());
+    j += ",\"flashBytes\":" + String(ESP.getFlashChipSize());
+    // Read runtime clock registers rather than the stock bootloader's header.
+    j += ",\"flashSpeedHz\":" + String(ESP.getFlashFrequencyMHz() * 1000000UL);
+    j += ",\"flashMode\":\"" + String(flashMode) + "\"";
+    j += ",\"heapTotalBytes\":" + String(ESP.getHeapSize());
+    j += ",\"heapFreeBytes\":" + String(ESP.getFreeHeap());
+    j += ",\"heapMinFreeBytes\":" + String(ESP.getMinFreeHeap());
+    j += ",\"heapMaxAllocBytes\":" + String(ESP.getMaxAllocHeap());
+    j += ",\"psramBytes\":" + String(ESP.getPsramSize());
+    j += ",\"psramFreeBytes\":" + String(ESP.getFreePsram());
+    j += ",\"sketchBytes\":" + String(ESP.getSketchSize());
+    j += ",\"otaSlotBytes\":" + String(next ? next->size : 0);
+    j += ",\"runningPartition\":\"" + String(running ? running->label : "") + "\"";
+    j += ",\"otaPartition\":\"" + String(next ? next->label : "") + "\"";
+    j += ",\"chipWifiBGN\":" + String(chip.features & CHIP_FEATURE_WIFI_BGN ? "true" : "false");
+    j += ",\"chipBluetoothClassic\":" + String(chip.features & CHIP_FEATURE_BT ? "true" : "false");
+    j += ",\"chipBLE\":" + String(chip.features & CHIP_FEATURE_BLE ? "true" : "false");
+    // This firmware never starts a Bluetooth controller or profile.
+    j += ",\"bluetoothFirmwareEnabled\":false";
+    // These are the selected board profile, not values probed from the panel.
+    j += ",\"board\":{\"displayController\":\"ST7789\",\"displayWidth\":" + String(SCREEN_W);
+    j += ",\"displayHeight\":" + String(SCREEN_H) + ",\"displayDiagonalInches\":1.54";
+    j += ",\"displaySpiHz\":" + String(SPI_FREQUENCY);
+    j += ",\"pins\":{\"mosi\":" + String(TFT_MOSI) + ",\"sclk\":" + String(TFT_SCLK);
+    j += ",\"dc\":" + String(TFT_DC) + ",\"rst\":" + String(TFT_RST) + ",\"cs\":" + String(TFT_CS);
+    j += ",\"backlight\":" + String(PIN_BACKLIGHT) + ",\"touch\":" + String(GEEKCLOCK_TOUCH_PIN) + "}";
+    j += ",\"backlightActiveLow\":" + String(GEEKCLOCK_BACKLIGHT_INVERT ? "true" : "false");
+    j += "}}";
+    return j;
+}
+
 #endif
 
 static void applyJsonToConfig(const String& json) {
@@ -1223,6 +1368,9 @@ static void setupWebServer() {
         j += "\"touchRaw\":" + String(gTouchButton.raw()) + ",";
         j += "\"touchBaseline\":" + String(gTouchButton.baseline()) + ",";
         j += "\"touchPressCount\":" + String(gTouchButton.pressCount()) + ",";
+        j += "\"lastTouchGesture\":\"" + String(gLastTouchGesture) + "\",";
+        j += "\"pet\":" + petStatusJson() + ",";
+        j += "\"hardware\":" + hardwareStatusJson() + ",";
 #endif
 #if defined(ARDUINO_ARCH_ESP32)
         const esp_partition_t* running = esp_ota_get_running_partition();
@@ -1240,6 +1388,50 @@ static void setupWebServer() {
         j += "}";
         server.send(200, "application/json; charset=utf-8", j);
     });
+
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+    server.on("/api/pet", HTTP_GET, []() {
+        addCors();
+        server.send(200, "application/json", petStatusJson());
+    });
+    server.on("/api/pet", HTTP_POST, []() {
+        addCors();
+        char action[16] = {};
+        extractJsonStr(server.arg("plain"), "action", action, sizeof(action));
+        if (strcmp(action, "enter") == 0 || strcmp(action, "exit") == 0) {
+            setPetMode(strcmp(action, "enter") == 0);
+        } else if (strcmp(action, "feed") == 0 || strcmp(action, "play") == 0 ||
+                   strcmp(action, "sleep") == 0) {
+            if (!gPetGame.active) {
+                server.send(409, "application/json", "{\"error\":\"먼저 다마고치 모드로 들어가 주세요.\"}");
+                return;
+            }
+            if (strcmp(action, "play") == 0 &&
+                (gPetGame.data.energy < 8 || gPetGame.data.fullness < 4)) {
+                server.send(409, "application/json", "{\"error\":\"밥을 먹고 쉬면 다시 놀 수 있어요.\"}");
+                return;
+            }
+            if (strcmp(action, "sleep") == 0 && gPetGame.activity() == PetActivity::Sleeping) {
+                server.send(409, "application/json", "{\"error\":\"지금은 쿨쿨 쉬고 있어요.\"}");
+                return;
+            }
+            const uint32_t nowMs = millis();
+            bool accepted = strcmp(action, "feed") == 0 ? gPetGame.feed(nowMs) :
+                            strcmp(action, "play") == 0 ? gPetGame.play(nowMs) :
+                                                         gPetGame.sleep(nowMs);
+            if (!accepted) {
+                server.send(429, "application/json", "{\"error\":\"Wait a moment before the next action\"}");
+                return;
+            }
+            savePetState();
+            gForceRedraw = true;
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Unknown pet action\"}");
+            return;
+        }
+        server.send(200, "application/json", petStatusJson());
+    });
+#endif
 
     // 4. Save Full Config
     server.on("/api/config", HTTP_POST, []() {
@@ -1485,6 +1677,9 @@ void setup() {
     }
 #endif
     loadConfigFromFS();
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+    loadPetState();
+#endif
 
     // 3. Initialize 240x240 ST7789 IPS Display (SPI_MODE3 for CS tied to GND!)
 #if defined(ARDUINO_ARCH_ESP32)
@@ -1508,7 +1703,7 @@ void setup() {
     });
 
     // 5. Render immediate boot frame so the user sees cute Chiikawa right away!
-    renderClockScreen();
+    renderCurrentScreen();
 
     // 6. Connect to Stored Wi-Fi (supports BOTH ESP8266 SDK sector AND stock SmallTV-Ultra /wifi.json!)
     WiFi.persistent(false);
@@ -1555,7 +1750,7 @@ void setup() {
         if (millis() - gAnimTickMs >= 360) {
             gAnimTickMs = millis();
             gAnimFrame = (gAnimFrame + 1) & 0x03;
-            renderClockScreen();
+            renderCurrentScreen();
         }
     }
 
@@ -1571,10 +1766,14 @@ void setup() {
 
     setupWebServer();
 
-    if (WiFi.status() == WL_CONNECTED) {
+    if (WiFi.status() == WL_CONNECTED
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+        && !gPetGame.active
+#endif
+    ) {
         fetchLiveWeather();
     }
-    renderClockScreen();
+    renderCurrentScreen();
 }
 
 void loop() {
@@ -1588,6 +1787,8 @@ void loop() {
 #endif
 #if defined(GEEKCLOCK_SMALLTV_PRO)
     serviceTouchButton();
+    if (gPetGame.tick(millis()) && gPetGame.active) gForceRedraw = true;
+    if (uint32_t(millis() - gPetLastSaveMs) >= 60000UL) savePetState();
 #endif
     if (WiFi.status() == WL_CONNECTED) {
         if (gApFallbackActive) {
@@ -1618,7 +1819,11 @@ void loop() {
     }
 
     // Periodic Open-Meteo Weather Fetch (every 15 minutes, or immediately when invalidated)
-    if (WiFi.status() == WL_CONNECTED) {
+    if (WiFi.status() == WL_CONNECTED
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+        && !gPetGame.active
+#endif
+    ) {
         unsigned long interval = gWeather.valid ? 900000UL : 20000UL;
         if (gWeather.lastFetchMs == 0 || (millis() - gWeather.lastFetchMs >= interval)) {
             fetchLiveWeather();
@@ -1643,6 +1848,6 @@ void loop() {
         gForceRedraw = false;
         lastDrawnSec = curSec;
         applyBacklight();
-        renderClockScreen();
+        renderCurrentScreen();
     }
 }

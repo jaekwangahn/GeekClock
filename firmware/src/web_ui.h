@@ -32,6 +32,24 @@ input[type=range]{flex:1;accent-color:var(--pink);}
 .toast.show{opacity:.95;}
 .footer-links{display:flex;justify-content:space-between;font-size:12px;color:var(--sub);margin:16px 4px 28px;}
 .footer-links a{color:#d94b7d;text-decoration:none;font-weight:700;}
+.pet-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;}
+.pet-top h2{margin:0;}.pet-level{font-size:12px;font-weight:700;color:#8a5a38;background:#fff3d9;border-radius:99px;padding:5px 9px;}
+.pet-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:12px 0;}
+.pet-stats label{margin:0 0 5px;font-size:12px;display:flex;justify-content:space-between;gap:3px;}
+.pet-stats progress{display:block;width:100%;height:9px;accent-color:var(--pink);}
+.pet-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;}
+.pet-actions .btn{font-size:12px;padding:10px 4px;}
+.pet .btn:disabled{opacity:.5;cursor:default;}
+.pet-hint{font-size:12px;line-height:1.7;color:var(--sub);margin:10px 0 0;}
+.pet-feedback{font-size:12px;min-height:18px;margin-top:8px;color:#9d3862;}
+.hardware summary{cursor:pointer;font-weight:700;font-size:14px;color:#d94b7d;}
+.hardware h3{font-size:12.5px;margin:18px 0 8px;color:var(--sub);}
+.hardware a{color:#b74e7c;}
+.hw-list{display:grid;grid-template-columns:minmax(100px,.8fr) minmax(0,1.7fr);margin:0;font-size:12px;line-height:1.65;}
+.hw-list dt,.hw-list dd{margin:0;padding:7px 0;border-bottom:1px solid #f3e7ed;overflow-wrap:anywhere;}
+.hw-list dt{color:var(--sub);padding-right:10px;}.hw-list dd{font-weight:600;}
+.hw-note{font-size:11.5px;color:var(--sub);line-height:1.7;margin:10px 0 0;}
+@media(max-width:370px){.hw-list{grid-template-columns:minmax(90px,.75fr) minmax(0,1.4fr);font-size:11.5px;}}
 </style>
 </head>
 <body>
@@ -39,6 +57,28 @@ input[type=range]{flex:1;accent-color:var(--pink);}
   <h1>치이카와 독립형 시계 <span class="badge">Standalone NTP</span></h1>
   <div class="status" id="statusBox">장비 상태를 불러오는 중...</div>
 </div>
+
+<section class="card pet" id="petCard" aria-labelledby="petHeading" hidden>
+  <div class="pet-top">
+    <h2 id="petHeading">🌱 치이카와 다마고치</h2>
+    <span class="pet-level" id="petLevel">Lv.1</span>
+  </div>
+  <div class="status" id="petActivity">치이카와의 소식을 불러오는 중...</div>
+  <div class="pet-stats">
+    <div><label for="petFullness">포만감 <span id="petFullnessVal">—</span></label><progress id="petFullness" max="100" value="0"></progress></div>
+    <div><label for="petHappiness">기분 <span id="petHappinessVal">—</span></label><progress id="petHappiness" max="100" value="0"></progress></div>
+    <div><label for="petEnergy">체력 <span id="petEnergyVal">—</span></label><progress id="petEnergy" max="100" value="0"></progress></div>
+  </div>
+  <button class="btn" type="button" id="petMode" onclick="petAction(petState&&petState.active?'exit':'enter')">다마고치 모드로 가기</button>
+  <div class="pet-actions">
+    <button class="btn sec" type="button" data-pet-care="feed" onclick="petAction('feed')" disabled>🍙 밥 주기</button>
+    <button class="btn sec" type="button" data-pet-care="play" onclick="petAction('play')" disabled>💗 놀아 주기</button>
+    <button class="btn sec" type="button" data-pet-care="sleep" onclick="petAction('sleep')" disabled>🌙 쉬게 하기</button>
+  </div>
+  <div class="pet-hint" id="petNeeds" hidden></div>
+  <p class="pet-hint">상단 더블 터치로 시계 ↔ 다마고치 전환<br>게임에서 한 번 터치하면 놀아 주기 · 약 0.9초 누르면 밥 주기</p>
+  <div class="pet-feedback" id="petFeedback" role="status" aria-live="polite"></div>
+</section>
 
 <div class="card">
   <h2>💡 화면 밝기 (즉시 반영)</h2>
@@ -133,6 +173,17 @@ input[type=range]{flex:1;accent-color:var(--pink);}
 
 <button class="btn" type="button" onclick="saveAll()">💾 설정 저장하기 (맥북 꺼도 영구 유지)</button>
 
+<details class="card hardware" id="hardwareCard" style="margin-top:14px" hidden>
+  <summary>🔎 하드웨어 사양</summary>
+  <h3>기기에서 읽은 값</h3>
+  <dl class="hw-list" id="hardwareMeasured"></dl>
+  <p class="hw-note">힙은 현재 펌웨어가 할당에 사용할 수 있는 메모리 영역입니다. 칩 전체 SRAM 용량과 같지 않으며, 여유량은 동작 중 바뀝니다. PSRAM 0 B는 현재 펌웨어에서 감지·초기화되지 않았다는 뜻입니다.</p>
+  <p class="hw-note" id="hardwareChipReference" hidden>제조사 문서 사양 (실측 아님): Xtensa LX6 · 내부 SRAM 520 KB (제조사 표기) · Bluetooth 4.2 BR/EDR + LE.<br>칩의 규격상 지원이며, 현재 Bluetooth 펌웨어 활성 여부는 위 상태를 따릅니다. <a href="https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf" target="_blank" rel="noopener noreferrer">Espressif ESP32 데이터시트</a></p>
+  <h3>보드·펌웨어 설정</h3>
+  <dl class="hw-list" id="hardwareBoard"></dl>
+  <p class="hw-note">화면 크기·컨트롤러·GPIO·SPI는 이 보드에 적용한 사양과 설정값입니다. 센서로 자동 식별한 값이 아닙니다. <a href="https://geekmagic.cc/products/smalltv-pro/" target="_blank" rel="noopener noreferrer">공식 SmallTV Pro 제품 사양 (1.54인치 IPS, 240 × 240)</a>. Bluetooth 기능 플래그만으로 규격 버전을 판정하지 않습니다.</p>
+</details>
+
 <details class="card" style="margin-top:14px">
   <summary style="cursor:pointer;font-weight:700;font-size:14px;color:var(--sub)">⚙️ 고급 화면 / Wi-Fi 변경</summary>
   <div class="row" style="margin-top:10px">
@@ -161,7 +212,7 @@ input[type=range]{flex:1;accent-color:var(--pink);}
 </details>
 
 <div class="footer-links">
-  <span>Chiikawa Standalone v1.0</span>
+  <span id="firmwareVersion">Chiikawa Standalone v1.0</span>
   <a href="/update">📦 펌웨어 업데이트 / 순정 복구 (/update)</a>
 </div>
 
@@ -169,6 +220,128 @@ input[type=range]{flex:1;accent-color:var(--pink);}
 
 <script>
 let curChar='chiikawa', brtTimer=null;
+let petState=null, petBusy=false;
+
+function renderPet(p){
+  const card=document.getElementById('petCard');
+  if(!p || typeof p.active!=='boolean'){ card.hidden=true; petState=null; return; }
+  petState=p; card.hidden=false;
+  const activities={wander:'이리저리 산책하고 있어요 🌱',happy:'함께 놀아서 신났어요 💗',eating:'냠냠! 맛있게 먹고 있어요 🍙',sleeping:'쿨쿨, 체력을 채우고 있어요 🌙'};
+  document.getElementById('petActivity').textContent=p.active?(activities[p.activity]||'치이카와와 함께하는 시간'):'시계 모드에서도 치이카와는 잘 지내고 있어요.';
+  document.getElementById('petLevel').textContent=`Lv.${p.level} · 돌봄 ${p.careCount}회`;
+  [['Fullness',p.fullness],['Happiness',p.happiness],['Energy',p.energy]].forEach(([key,value])=>{
+    const n=Math.max(0,Math.min(100,Number(value)||0));
+    document.getElementById('pet'+key).value=n;
+    document.getElementById('pet'+key+'Val').textContent=n+'%';
+  });
+  const mode=document.getElementById('petMode');
+  mode.textContent=p.active?'시계 화면으로 돌아가기':'다마고치 모드로 가기';
+  mode.disabled=petBusy;
+  const needsRest=p.energy<8||p.fullness<4;
+  card.querySelectorAll('[data-pet-care]').forEach(b=>{
+    const action=b.dataset.petCare;
+    b.disabled=petBusy||!p.active||(action==='play'&&needsRest)||(action==='sleep'&&p.activity==='sleeping');
+  });
+  const needs=document.getElementById('petNeeds');
+  needs.hidden=!p.active||!needsRest;
+  needs.textContent=needsRest?'밥을 먹고 쉬면 다시 놀 수 있어요. 밥 주기와 쉬게 하기로 돌봐 주세요.':'';
+}
+
+function hardwareBytes(value){
+  const n=Number(value);
+  if(value===null||value===undefined||!Number.isFinite(n)||n<0) return '확인 불가';
+  const exact=Math.trunc(n).toLocaleString('ko-KR')+' B';
+  if(n>=1048576) return (n/1048576).toFixed(2).replace(/\.00$/,'')+' MiB ('+exact+')';
+  if(n>=1024) return (n/1024).toFixed(2).replace(/\.00$/,'')+' KiB ('+exact+')';
+  return exact;
+}
+
+function hardwareRows(id,rows){
+  const list=document.getElementById(id);
+  list.replaceChildren();
+  rows.forEach(([label,value])=>{
+    const term=document.createElement('dt'), detail=document.createElement('dd');
+    term.textContent=label;
+    detail.textContent=value===null||value===undefined?'확인 불가':String(value);
+    list.append(term,detail);
+  });
+}
+
+function renderHardware(h){
+  const card=document.getElementById('hardwareCard');
+  if(!h||typeof h!=='object'){card.hidden=true;return;}
+  card.hidden=false;
+  document.getElementById('hardwareChipReference').hidden=h.chipModel!=='ESP32-D0WD-V3';
+  const number=(n,unit='')=>Number.isFinite(Number(n))&&n!==null&&n!==undefined?Number(n).toLocaleString('ko-KR')+unit:'확인 불가';
+  const mhz=n=>Number.isFinite(Number(n))&&n!==null&&n!==undefined?number(Number(n)/1000000,' MHz'):'확인 불가';
+  const revision=Number.isInteger(h.chipRevision)?`v${Math.floor(h.chipRevision/100)}.${h.chipRevision%100} (원시값 ${h.chipRevision})`:'확인 불가';
+  const radios=[];
+  if(h.chipBluetoothClassic===true) radios.push('Classic');
+  if(h.chipBLE===true) radios.push('BLE');
+  const btHardware=radios.length?radios.join(' · '):'지원 플래그 없음';
+  const btFirmware=h.bluetoothFirmwareEnabled===true?'활성':h.bluetoothFirmwareEnabled===false?'비활성':'확인 불가';
+  hardwareRows('hardwareMeasured',[
+    ['칩 모델',h.chipModel],
+    ['칩 리비전',revision],
+    ['CPU',number(h.chipCores,' 코어')+' · '+number(h.cpuMHz,' MHz')],
+    ['크리스털',number(h.xtalMHz,' MHz')],
+    ['플래시 용량',hardwareBytes(h.flashBytes)],
+    ['플래시 동작',mhz(h.flashSpeedHz)+' · '+(h.flashMode||'확인 불가')],
+    ['힙 전체',hardwareBytes(h.heapTotalBytes)],
+    ['힙 여유 (현재)',hardwareBytes(h.heapFreeBytes)],
+    ['힙 최소 여유',hardwareBytes(h.heapMinFreeBytes)],
+    ['최대 연속 할당',hardwareBytes(h.heapMaxAllocBytes)],
+    ['PSRAM 감지 용량',hardwareBytes(h.psramBytes)+(h.psramBytes===0?' · 감지·초기화 안 됨':'')],
+    ['PSRAM 여유',hardwareBytes(h.psramFreeBytes)],
+    ['앱 이미지 크기',hardwareBytes(h.sketchBytes)],
+    ['실행 / OTA 파티션',(h.runningPartition||'확인 불가')+' / '+(h.otaPartition||'확인 불가')],
+    ['OTA 슬롯 크기',hardwareBytes(h.otaSlotBytes)],
+    ['Wi-Fi 하드웨어',h.chipWifiBGN===true?'802.11 b/g/n 지원':h.chipWifiBGN===false?'지원 플래그 없음':'확인 불가'],
+    ['Bluetooth 하드웨어',btHardware],
+    ['Bluetooth 펌웨어',btFirmware]
+  ]);
+  const board=h.board||{}, pins=board.pins||{};
+  const gpio=n=>Number.isInteger(n)?(n===-1?'GND에 고정 / 미사용':'GPIO'+n):'확인 불가';
+  hardwareRows('hardwareBoard',[
+    ['기기 모델 (펌웨어 대상)',h.model],
+    ['화면',number(board.displayDiagonalInches,'인치')+' · '+number(board.displayWidth)+' × '+number(board.displayHeight)+' px'],
+    ['화면 컨트롤러',board.displayController],
+    ['화면 SPI 설정',mhz(board.displaySpiHz)],
+    ['SPI MOSI / SCLK',gpio(pins.mosi)+' / '+gpio(pins.sclk)],
+    ['화면 DC / RST',gpio(pins.dc)+' / '+gpio(pins.rst)],
+    ['화면 CS',gpio(pins.cs)],
+    ['백라이트',gpio(pins.backlight)+(board.backlightActiveLow===true?' · Active LOW':'')],
+    ['상단 정전식 터치',gpio(pins.touch)]
+  ]);
+}
+
+function renderDeviceExtras(d){
+  renderHardware(d.hardware);
+  renderPet(d.pet);
+  if(d.version) document.getElementById('firmwareVersion').textContent=d.version;
+}
+
+async function petAction(action){
+  if(petBusy || !petState) return;
+  petBusy=true; renderPet(petState);
+  const feedback=document.getElementById('petFeedback');
+  feedback.textContent='치이카와에게 전하고 있어요...';
+  try{
+    const r=await fetch('/api/pet',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});
+    if(!r.ok){
+      if(r.status===429) throw new Error('잠깐만요! 1초 뒤 다시 돌봐 주세요.');
+      let detail=null;
+      try{ detail=await r.json(); }catch(e){}
+      throw new Error(detail&&typeof detail.error==='string'?detail.error:'요청을 처리하지 못했어요. 잠시 뒤 다시 시도해 주세요.');
+    }
+    const p=await r.json();
+    if(typeof p.active!=='boolean') throw new Error('기기 응답을 확인할 수 없어요. 다시 시도해 주세요.');
+    renderPet(p);
+    const messages={enter:'치이카와의 작은 방에 도착했어요 🌱',exit:'시계 화면으로 돌아왔어요.',feed:'치이카와에게 밥을 주었어요 🍙',play:'치이카와와 함께 놀았어요 💗',sleep:'치이카와가 편안히 쉬어요 🌙'};
+    feedback.textContent=messages[action]||'반영했어요.';
+  }catch(e){ feedback.textContent=e.message||'기기와 연결하지 못했어요. 연결을 확인해 주세요.'; }
+  finally{ petBusy=false; if(petState) renderPet(petState); }
+}
 document.querySelectorAll('#charChips .chip').forEach(el=>{
   el.onclick=()=>{
     curChar=el.dataset.v;
@@ -243,7 +416,9 @@ function renderMsgBitmapHex(text){
 async function loadState(){
   try{
     const r=await fetch('/api/status');
+    if(!r.ok) throw new Error('기기 상태를 불러오지 못했어요.');
     const d=await r.json();
+    if(!petBusy) renderDeviceExtras(d);
     document.getElementById('statusBox').innerHTML=
       `현재 시각: <b>${d.time}</b> (${d.ntpSynced?'NTP 동기화 완료 ✓':'NTP 동기화 대기 중...'})<br>`+
       `NTP 서버: <b>${d.ntpServer}</b> | IP: <b>${d.ip}</b> | 날씨: <b>${d.city} ${d.temp}°C</b>`;
@@ -337,7 +512,9 @@ loadState();
 setInterval(async()=>{
   try{
     const r=await fetch('/api/status');
+    if(!r.ok) throw new Error('기기 상태를 불러오지 못했어요.');
     const d=await r.json();
+    if(!petBusy) renderDeviceExtras(d);
     document.getElementById('statusBox').innerHTML=
       `현재 시각: <b>${d.time}</b> (${d.ntpSynced?'NTP 동기화 완료 ✓':'NTP 동기화 대기 중...'})<br>`+
       `NTP 서버: <b>${d.ntpServer}</b> | IP: <b>${d.ip}</b> | 날씨: <b>${d.city} ${d.temp}°C</b>`;

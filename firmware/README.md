@@ -54,3 +54,48 @@ V1.2부터 상단 터치 버튼(GPIO32/T9)을 누를 때마다 치이카와 → 
 무결성 확인: [크기 및 SHA256 manifest](SmallTV-PRO_Chiikawa_ESP32_V1.2.json).
 V1.2는 Pro 기기에 OTA 설치 후 재부팅, Wi-Fi, NTP, 날씨, 웹 설정, 터치 센서 보정을 확인했습니다.
 터치 입력 로직은 호스트 시뮬레이션으로 보정·잡음·디바운스·길게 누르기·재누르기·타이머 순환을 검증했습니다.
+
+## Pro V1.3 치이카와 다마고치
+
+상단을 빠르게 두 번 터치하면 시계와 다마고치 화면을 오갑니다.
+더블 터치를 판별하기 위해 한 번 터치 동작은 손을 뗀 후 약 0.35초 뒤 반영됩니다.
+
+| 조작 | 시계 | 다마고치 |
+| --- | --- | --- |
+| 한 번 터치 | 캐릭터 순환 | 놀아주기 |
+| 두 번 터치 | 다마고치로 이동 | 시계로 돌아가기 |
+| 약 0.9초 길게 터치 | 동작 없음 | 밥 주기 |
+
+치이카와가 정원을 돌아다니며 배부름·행복·기력이 조금씩 줄어듭니다.
+밥과 놀이로 경험치와 레벨이 오르고, 기력이 부족하면 자동으로 낮잠을 잡니다.
+웹 설정에서도 밥·놀이·휴식과 모드 변경을 할 수 있습니다.
+게임은 별도 서버 없이 기기 단독으로 동작하며, 게임 상태와 모드는 NVS에 저장합니다.
+전원이 꺼져 있던 동안의 상태 감소는 계산하지 않습니다.
+
+게임 중에는 주기적인 날씨 HTTP 요청을 잠시 미뤄 터치와 이동이 멈추지 않게 합니다.
+시계로 돌아가면 필요한 날씨 갱신이 재개됩니다.
+
+```bash
+# GeekClock 루트에서 실행
+clang++ -std=c++17 -Wall -Wextra -Werror firmware/tests/pet_logic_test.cpp -o /tmp/pet-logic-test
+/tmp/pet-logic-test
+.venv/bin/python firmware/tools/preview_pet.py --output /tmp/geekmagic-pet-preview
+.venv/bin/pio run -d firmware -e geekmagic_pro
+```
+
+게임 표정·한글 폰트 재생성: `.venv/bin/python firmware/tools/generate_pet_assets.py`.
+`/api/status`의 `pet` 및 `/api/pet`에서 게임 상태를 조회할 수 있습니다.
+`POST /api/pet`은 예를 들어 `{"action":"feed"}`를 받으며, action 값은 `enter`, `exit`, `feed`, `play`, `sleep` 중 하나입니다.
+
+## Pro V1.4 하드웨어 사양 표시
+
+최신 OTA 파일: [SmallTV-PRO_Chiikawa_ESP32_V1.4.bin](SmallTV-PRO_Chiikawa_ESP32_V1.4.bin) · [크기 및 SHA256](SmallTV-PRO_Chiikawa_ESP32_V1.4.json)
+
+V1.4에는 위의 다마고치 게임도 포함됩니다.
+
+웹 설정의 `하드웨어 사양`을 펼치면 칩 모델·리비전, CPU 코어와 현재 클럭,
+실제 플래시 용량·동작 클럭·모드, 내부 힙·PSRAM 감지 결과, 앱과 OTA 슬롯 크기를 봅니다.
+`/api/status`의 `hardware`에 원시 바이트 단위와 보드 설정을 함께 제공합니다.
+화면·GPIO·화면 SPI 설정 및 제조사 문서 사양은 런타임 측정값과 구분합니다.
+힙 용량은 칩 전체 SRAM 용량이 아니며, Bluetooth 하드웨어 지원과 펌웨어 활성 상태도 별개입니다.
+플래시 동작 클럭은 기존 부트로더 헤더의 설정 대신 현재 클럭 레지스터에서 읽습니다.

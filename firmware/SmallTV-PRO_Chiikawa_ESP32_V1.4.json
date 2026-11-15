@@ -1,0 +1,17 @@
+{
+  "model": "GeekMagic SmallTV-PRO",
+  "version": "Chiikawa-Standalone-V1.4-SmallTV-PRO",
+  "environment": "geekmagic_pro",
+  "chip": "ESP32",
+  "bytes": 1259648,
+  "sha256": "c76d0e60540094921564dfc9f7be1b6c687b7299f5267b7cc0fe3e1900b15c32",
+  "touchPin": 32,
+  "gestures": {
+    "single": "clock character / pet play",
+    "double": "toggle clock/pet mode",
+    "long900ms": "feed pet"
+  },
+  "pet": "roaming, needs, feed, play, sleep, XP, persistent state",
+  "ota": "application only; preserve existing partitions",
+  "hardware": "Live chip/CPU/flash/heap/PSRAM/OTA telemetry; board and manufacturer specs labeled separately"
+}
