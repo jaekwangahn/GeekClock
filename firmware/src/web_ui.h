@@ -89,8 +89,9 @@ input[type=range]{flex:1;accent-color:var(--pink);}
     <button type="button" data-screen="exchange" aria-pressed="false" onclick="setScreenMode('exchange')">엔화 환율</button>
     <button type="button" data-screen="mario" aria-pressed="false" onclick="setScreenMode('mario')">마리오 시계</button>
     <button type="button" data-screen="pomodoro" aria-pressed="false" onclick="setScreenMode('pomodoro')">뽀모도로</button>
+    <button type="button" data-screen="settings" aria-pressed="false" onclick="setScreenMode('settings')">기기 설정</button>
   </div>
-  <p class="pet-hint">상단 더블 터치: 시계 → 다마고치 → 엔화 환율 → 마리오 시계 → 뽀모도로 → 시계</p>
+  <p class="pet-hint">상단 더블 터치: 시계 → 다마고치 → 엔화 환율 → 마리오 시계 → 뽀모도로 → 기기 설정 → 시계</p>
   <div class="pet-feedback" id="screenFeedback" role="status" aria-live="polite"></div>
 </section>
 
@@ -343,7 +344,7 @@ let marioState=null, marioBusy=false;
 let pomodoroState=null, pomodoroBusy=false, pomodoroConfigDirty=false;
 let roomState=null, roomBusy=false, roomCatalogSignature='';
 let statusRequest=null, pomodoroReadBusy=false;
-const SCREEN_MODES=['clock','pet','exchange','mario','pomodoro'];
+const SCREEN_MODES=['clock','pet','exchange','mario','pomodoro','settings'];
 
 
 function renderPet(p){
@@ -461,7 +462,7 @@ async function setScreenMode(mode){
     const result=await response.json();
     if(!SCREEN_MODES.includes(result.mode)) throw new Error('기기 화면 응답을 확인할 수 없어요.');
     renderScreenMode(result.mode);
-    feedback.textContent={clock:'시계 화면을 표시했어요.',pet:'다마고치 화면을 표시했어요.',exchange:'엔화 환율 화면을 표시했어요.',mario:'마리오 시계 화면을 표시했어요.',pomodoro:'치이카와 뽀모도로 화면을 표시했어요.'}[result.mode];
+    feedback.textContent={clock:'시계 화면을 표시했어요.',pet:'다마고치 화면을 표시했어요.',exchange:'엔화 환율 화면을 표시했어요.',mario:'마리오 시계 화면을 표시했어요.',pomodoro:'치이카와 뽀모도로 화면을 표시했어요.',settings:'기기 설정 화면을 표시했어요.'}[result.mode];
     await fetchDeviceExtras();
   }catch(error){feedback.textContent=error.message||'기기와 연결하지 못했어요.';}
   finally{screenBusy=false;renderScreenMode(currentScreenMode);if(petState)renderPet(petState);}
@@ -886,11 +887,16 @@ async function triggerSync(url,msg){
 }
 
 async function saveWifi(){
-  const ssid=document.getElementById('wifiSsid').value.trim();
+  const ssid=document.getElementById('wifiSsid').value;
   const pass=document.getElementById('wifiPass').value;
   if(!ssid){ showToast('새 Wi-Fi 이름을 입력해주세요.'); return; }
-  await fetch('/api/wifi',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid,pass})});
-  showToast('새 Wi-Fi로 재연결합니다 (약 10초 소요)...');
+  try {
+    const response=await fetch('/api/wifi',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid,pass})});
+    if(!response.ok){ showToast('Wi-Fi를 저장하지 못했습니다. 입력을 확인해주세요.'); return; }
+    showToast('새 Wi-Fi로 재연결합니다 (약 10초 소요)...');
+  } catch(error) {
+    showToast('기기 응답을 받지 못했습니다. 연결 상태를 확인해주세요.');
+  }
 }
 
 loadState();

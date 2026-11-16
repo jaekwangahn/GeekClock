@@ -94,7 +94,7 @@ static bool gFsMounted = false;
 static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.1-ESP32C2";
 static constexpr const char* DEVICE_MODEL = "SDC2 (ESP32-C2)";
 #elif defined(GEEKCLOCK_SMALLTV_PRO)
-static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.9-SmallTV-PRO";
+static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V2.0-SmallTV-PRO";
 static constexpr const char* DEVICE_MODEL = "GeekMagic SmallTV-PRO";
 #elif defined(ARDUINO_ARCH_ESP32)
 static constexpr const char* FIRMWARE_VERSION = "Chiikawa-Standalone-V1.1-ESP32";
@@ -167,8 +167,54 @@ static uint32_t gStudyRewardAtMs = 0;
 static uint32_t gStudyLastSaveMs = 0;
 static bool gStudyStorageOk = true;
 static bool gStudyDirty = false;
-enum class ScreenMode : uint8_t { Clock, Pet, Exchange, Mario, Pomodoro };
+enum class ScreenMode : uint8_t { Clock, Pet, Exchange, Mario, Pomodoro, Settings };
 static ScreenMode gScreenMode = ScreenMode::Clock;
+static constexpr char SETUP_SSID[] = "Chiikawa-Clock";
+static constexpr uint32_t WIFI_RESET_CONFIRM_MS = 8000;
+static bool gWifiResetArmed = false;
+static bool gWifiResetFailed = false;
+static uint32_t gWifiResetArmedAt = 0;
+struct ProWifiCredentials {
+    char ssid[33];
+    char pass[65];
+};
+// No record means an upgrade can reuse stock credentials. An empty saved
+// record keeps setup mode active and blocks all legacy credential sources.
+static bool gUseProWifiCredentials = false;
+static ProWifiCredentials gProWifiCredentials{};
+
+static bool saveProWifiCredentials(const ProWifiCredentials& credentials) {
+    Preferences prefs;
+    if (!prefs.begin("chiiwifi", false)) return false;
+    const bool saved = prefs.putBytes("credentials", &credentials, sizeof(credentials)) == sizeof(credentials);
+    prefs.end();
+    if (saved) {
+        gProWifiCredentials = credentials;
+        gUseProWifiCredentials = true;
+    }
+    return saved;
+}
+
+static void loadProWifiCredentials() {
+    Preferences prefs;
+    if (!prefs.begin("chiiwifi", true)) return;
+    gUseProWifiCredentials = prefs.getBytesLength("credentials") == sizeof(gProWifiCredentials) &&
+        prefs.getBytes("credentials", &gProWifiCredentials, sizeof(gProWifiCredentials)) == sizeof(gProWifiCredentials);
+    prefs.end();
+    gProWifiCredentials.ssid[sizeof(gProWifiCredentials.ssid) - 1] = '\0';
+    gProWifiCredentials.pass[sizeof(gProWifiCredentials.pass) - 1] = '\0';
+}
+
+static bool proWifiSetupRequested() {
+    return gUseProWifiCredentials && gProWifiCredentials.ssid[0] == '\0';
+}
+
+static void startProSetupAp() {
+    WiFi.mode(WIFI_AP);
+    gApFallbackActive = WiFi.softAP(SETUP_SSID);
+    gLastWifiRetryMs = millis();
+    gForceRedraw = true;
+}
 static ExchangeRateClient gExchange;
 struct ExchangeView {
     bool valid = false;
@@ -375,8 +421,9 @@ static uint16_t nextUtf8Codepoint(const char*& p) {
     }
     if ((c & 0xF0) == 0xE0) {
         uint8_t c2 = (uint8_t)p[0];
+        if ((c2 & 0xC0) != 0x80) return '?';
         uint8_t c3 = (uint8_t)p[1];
-        if (((c2 & 0xC0) == 0x80) && ((c3 & 0xC0) == 0x80)) {
+        if ((c3 & 0xC0) == 0x80) {
             p += 2;
             return ((uint16_t)(c & 0x0F) << 12) | ((uint16_t)(c2 & 0x3F) << 6) | (c3 & 0x3F);
         }
@@ -837,10 +884,12 @@ static void renderClockScreen() {
 #include "study_renderer.h"
 #include "exchange_renderer.h"
 #include "mario_renderer.h"
+#include "settings_renderer.h"
 #endif
 
 static void renderCurrentScreen() {
 #if defined(GEEKCLOCK_SMALLTV_PRO)
+    if (gScreenMode == ScreenMode::Settings) { renderSettingsScreen(); return; }
     if (gScreenMode == ScreenMode::Pomodoro) { renderPomodoroScreen(); return; }
     if (gScreenMode == ScreenMode::Mario) { updateMarioView(); renderMarioScreen(); return; }
     if (gScreenMode == ScreenMode::Exchange) { renderExchangeScreen(); return; }
@@ -1170,7 +1219,8 @@ static const char* screenModeName() {
     return gScreenMode == ScreenMode::Pet ? "pet" :
            gScreenMode == ScreenMode::Exchange ? "exchange" :
            gScreenMode == ScreenMode::Mario ? "mario" :
-           gScreenMode == ScreenMode::Pomodoro ? "pomodoro" : "clock";
+           gScreenMode == ScreenMode::Pomodoro ? "pomodoro" :
+           gScreenMode == ScreenMode::Settings ? "settings" : "clock";
 }
 
 static void updateExchangeView() {
@@ -1214,10 +1264,12 @@ static void loadScreenState() {
 static void setScreenMode(ScreenMode mode) {
     if (gScreenMode == mode) return;
     gScreenMode = mode;
+    gWifiResetArmed = false;
+    gWifiResetFailed = false;
     gPetGame.active = mode == ScreenMode::Pet;
     savePetState();
     Preferences prefs;
-    if (prefs.begin("chiiscreen", false)) {
+    if (mode != ScreenMode::Settings && prefs.begin("chiiscreen", false)) {
         prefs.putUChar("mode", uint8_t(mode));
         prefs.end();
     }
@@ -1272,12 +1324,22 @@ static void serviceTouchButton() {
     const uint16_t raw = max(min(a, b), min(max(a, b), c));
     gTouchButton.update(raw, nowMs);
     const Gesture gesture = gTouchGestures.update(gTouchButton.pressed(), nowMs);
+    if (gWifiResetArmed && uint32_t(nowMs - gWifiResetArmedAt) >= WIFI_RESET_CONFIRM_MS) {
+        gWifiResetArmed = false;
+        gForceRedraw = true;
+    }
     if (gesture == Gesture::Double) {
         gLastTouchGesture = "double";
-        setScreenMode(ScreenMode((uint8_t(gScreenMode) + 1) % 5));
+        const auto next = gScreenMode == ScreenMode::Settings ? ScreenMode::Clock :
+                          ScreenMode(uint8_t(gScreenMode) + 1);
+        setScreenMode(next);
     } else if (gesture == Gesture::Single) {
         gLastTouchGesture = "single";
-        if (gScreenMode == ScreenMode::Pomodoro) {
+        if (gScreenMode == ScreenMode::Settings) {
+            gWifiResetArmed = false;
+            gWifiResetFailed = false;
+            gForceRedraw = true;
+        } else if (gScreenMode == ScreenMode::Pomodoro) {
             togglePomodoro(nowMs);
         } else if (gPetGame.active) {
             if (gPetGame.play(nowMs)) { savePetState(); gForceRedraw = true; }
@@ -1291,7 +1353,30 @@ static void serviceTouchButton() {
         }
     } else if (gesture == Gesture::Long) {
         gLastTouchGesture = "long";
-        if (gScreenMode == ScreenMode::Pomodoro) {
+        if (gScreenMode == ScreenMode::Settings) {
+            if (proWifiSetupRequested()) return;
+            if (!gWifiResetArmed) {
+                gWifiResetArmed = true;
+                gWifiResetArmedAt = nowMs;
+                gWifiResetFailed = false;
+            } else {
+                gWifiResetArmed = false;
+                gWifiResetFailed = !saveProWifiCredentials({});
+                if (!gWifiResetFailed) {
+                    WiFi.mode(WIFI_STA);
+                    WiFi.setAutoReconnect(false);
+                    WiFi.disconnect();
+                    if (esp_wifi_set_storage(WIFI_STORAGE_FLASH) == ESP_OK) {
+                        wifi_config_t emptyConfig{};
+                        esp_wifi_set_config(WIFI_IF_STA, &emptyConfig);
+                        esp_wifi_set_storage(WIFI_STORAGE_RAM);
+                    }
+                    if (gFsMounted) LittleFS.remove("/wifi.json");
+                    startProSetupAp();
+                }
+            }
+            gForceRedraw = true;
+        } else if (gScreenMode == ScreenMode::Pomodoro) {
             settleStudy(nowMs);
             gPomodoro.reset(nowMs);
             gStudyRewardCoins = 0;
@@ -1962,6 +2047,7 @@ static void setupWebServer() {
         else if (strcmp(mode, "exchange") == 0) setScreenMode(ScreenMode::Exchange);
         else if (strcmp(mode, "mario") == 0) setScreenMode(ScreenMode::Mario);
         else if (strcmp(mode, "pomodoro") == 0) setScreenMode(ScreenMode::Pomodoro);
+        else if (strcmp(mode, "settings") == 0) setScreenMode(ScreenMode::Settings);
         else {
             server.send(400, "application/json", "{\"error\":\"Unknown screen mode\"}");
             return;
@@ -2122,6 +2208,32 @@ static void setupWebServer() {
     server.on("/api/wifi", HTTP_POST, []() {
         addCors();
         String body = server.arg("plain");
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+        ProWifiCredentials credentials{};
+        // One spare byte in each input buffer lets us reject oversized values.
+        char ssid[34] = {}, pass[66] = {};
+        if (!extractJsonStr(body, "ssid", ssid, sizeof(ssid)) ||
+            !extractJsonStr(body, "pass", pass, sizeof(pass)) ||
+            !ssid[0] || strlen(ssid) >= sizeof(credentials.ssid) ||
+            strlen(pass) >= sizeof(credentials.pass)) {
+            server.send(400, "application/json", "{\"ok\":false}");
+            return;
+        }
+        strlcpy(credentials.ssid, ssid, sizeof(credentials.ssid));
+        strlcpy(credentials.pass, pass, sizeof(credentials.pass));
+        if (!saveProWifiCredentials(credentials)) {
+            server.send(500, "application/json", "{\"ok\":false}");
+            return;
+        }
+        server.send(200, "application/json", "{\"ok\":true}");
+        delay(250);
+        WiFi.mode(gApFallbackActive ? WIFI_AP_STA : WIFI_STA);
+        WiFi.disconnect();
+        esp_wifi_set_storage(WIFI_STORAGE_RAM);
+        WiFi.setAutoReconnect(true);
+        WiFi.begin(credentials.ssid, credentials.pass);
+        gForceRedraw = true;
+#else
         char ssid[64] = {}, pass[64] = {};
         extractJsonStr(body, "ssid", ssid, sizeof(ssid));
         extractJsonStr(body, "pass", pass, sizeof(pass));
@@ -2151,6 +2263,7 @@ static void setupWebServer() {
         WiFi.mode(WIFI_STA);
         WiFi.begin(ssid, pass);
         WiFi.persistent(false);
+#endif
 #endif
     });
 
@@ -2235,6 +2348,62 @@ static void setupWebServer() {
 // ============================================================================
 // Setup & Main Loop
 // ============================================================================
+static void connectStoredWifi() {
+    char savedSsid[64] = {}, savedPass[65] = {};
+    const char* wifiPaths[] = {"/wifi.json"
+#if defined(ARDUINO_ARCH_ESP32)
+        , "/config.json", "/.sys/config.json"
+#endif
+    };
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+    if (gUseProWifiCredentials) {
+        strlcpy(savedSsid, gProWifiCredentials.ssid, sizeof(savedSsid));
+        strlcpy(savedPass, gProWifiCredentials.pass, sizeof(savedPass));
+    }
+#endif
+    for (const char* path : wifiPaths) {
+        if (savedSsid[0]) break;
+        if (!gFsMounted || !LittleFS.exists(path)) continue;
+        File wf = LittleFS.open(path, "r");
+        if (wf) {
+            String wj = wf.readString();
+            wf.close();
+            extractJsonStr(wj, "a", savedSsid, sizeof(savedSsid));
+            extractJsonStr(wj, "p", savedPass, sizeof(savedPass));
+            if (savedSsid[0] == '\0') {
+                extractJsonStr(wj, "ssid", savedSsid, sizeof(savedSsid));
+                extractJsonStr(wj, "pass", savedPass, sizeof(savedPass));
+                if (savedPass[0] == '\0') extractJsonStr(wj, "password", savedPass, sizeof(savedPass));
+            }
+        }
+    }
+
+    if (savedSsid[0] != '\0') {
+        WiFi.begin(savedSsid, savedPass);
+    } else {
+        WiFi.begin();
+    }
+
+    unsigned long t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - t0) < 14000) {
+        delay(180);
+        if (millis() - gAnimTickMs >= 360) {
+            gAnimTickMs = millis();
+            gAnimFrame = (gAnimFrame + 1) & 0x03;
+            renderCurrentScreen();
+        }
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        configureNtpSync();
+    } else {
+        // Fallback Recovery AP so user can ALWAYS configure Wi-Fi or /update wirelessly!
+        WiFi.mode(WIFI_AP_STA);
+        gApFallbackActive = WiFi.softAP("Chiikawa-Clock");
+        gLastWifiRetryMs = millis();
+    }
+}
+
 void setup() {
 #if defined(GEEKCLOCK_SMALLTV_PRO)
     // Keep restored RTC time in KST even before Wi-Fi/NTP initialization.
@@ -2326,57 +2495,17 @@ void setup() {
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
 
-    char savedSsid[64] = {}, savedPass[64] = {};
-    const char* wifiPaths[] = {"/wifi.json"
-#if defined(ARDUINO_ARCH_ESP32)
-        , "/config.json", "/.sys/config.json"
-#endif
-    };
-    for (const char* path : wifiPaths) {
-        if (!gFsMounted || !LittleFS.exists(path)) continue;
-        File wf = LittleFS.open(path, "r");
-        if (wf) {
-            String wj = wf.readString();
-            wf.close();
-            extractJsonStr(wj, "a", savedSsid, sizeof(savedSsid));
-            extractJsonStr(wj, "p", savedPass, sizeof(savedPass));
-            if (savedSsid[0] == '\0') {
-                extractJsonStr(wj, "ssid", savedSsid, sizeof(savedSsid));
-                extractJsonStr(wj, "pass", savedPass, sizeof(savedPass));
-                if (savedPass[0] == '\0') extractJsonStr(wj, "password", savedPass, sizeof(savedPass));
-            }
-        }
-        if (savedSsid[0] != '\0') break;
-    }
-
-    if (savedSsid[0] != '\0') {
-        WiFi.begin(savedSsid, savedPass);
-    } else {
-        WiFi.begin();
-    }
-
-    unsigned long t0 = millis();
-    while (WiFi.status() != WL_CONNECTED && (millis() - t0) < 14000) {
-        delay(180);
-        if (millis() - gAnimTickMs >= 360) {
-            gAnimTickMs = millis();
-            gAnimFrame = (gAnimFrame + 1) & 0x03;
-            renderCurrentScreen();
-        }
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-        configureNtpSync();
-    } else {
-        // Fallback Recovery AP so user can ALWAYS configure Wi-Fi or /update wirelessly!
-        WiFi.mode(WIFI_AP_STA);
-        WiFi.softAP("Chiikawa-Clock");
-        gApFallbackActive = true;
-        gLastWifiRetryMs = millis();
-    }
-
 #if defined(GEEKCLOCK_SMALLTV_PRO)
+    loadProWifiCredentials();
+    if (proWifiSetupRequested()) {
+        startProSetupAp();
+        setScreenMode(ScreenMode::Settings);
+    } else {
+        connectStoredWifi();
+    }
     gBleRemote.begin();
+#else
+    connectStoredWifi();
 #endif
     setupWebServer();
 
@@ -2420,6 +2549,11 @@ void loop() {
     if (gPetGame.tick(millis()) && gPetGame.active) gForceRedraw = true;
     if (uint32_t(millis() - gPetLastSaveMs) >= 60000UL) savePetState();
 #endif
+#if defined(GEEKCLOCK_SMALLTV_PRO)
+    if (proWifiSetupRequested()) {
+        if (!gApFallbackActive && uint32_t(millis() - gLastWifiRetryMs) >= 5000) startProSetupAp();
+    } else
+#endif
     if (WiFi.status() == WL_CONNECTED) {
         if (gApFallbackActive) {
             // Connected to home Wi-Fi! Turn off fallback AP cleanly
@@ -2433,8 +2567,7 @@ void loop() {
         gLastWifiRetryMs = millis();
         if (!gApFallbackActive) {
             WiFi.mode(WIFI_AP_STA);
-            WiFi.softAP("Chiikawa-Clock");
-            gApFallbackActive = true;
+            gApFallbackActive = WiFi.softAP("Chiikawa-Clock");
         }
         // Only scan/reconnect if an SSID actually exists; otherwise keep AP channel rock-solid!
         if (WiFi.SSID().length() > 0 || (gFsMounted && LittleFS.exists("/wifi.json"))) {
